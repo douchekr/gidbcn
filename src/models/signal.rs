@@ -11,20 +11,26 @@ pub enum Condition {
     ProfitBelow { percentage: f64 },
 }
 
-impl Condition {
-    pub fn type_name(&self) -> &str {
-        match self {
-            Condition::PriceAbove { .. } => "price_above",
-            Condition::PriceBelow { .. } => "price_below",
-            Condition::ProfitAbove { .. } => "profit_above",
-            Condition::ProfitBelow { .. } => "profit_below",
+fn fmt_num(v: f64) -> String {
+    let n = v as i64;
+    let neg = n < 0;
+    let s = n.unsigned_abs().to_string();
+    let len = s.len();
+    let mut result = String::with_capacity(len + len / 3);
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (len - i) % 3 == 0 {
+            result.push(',');
         }
+        result.push(c);
     }
+    if neg { format!("-{result}") } else { result }
+}
 
+impl Condition {
     pub fn display_description(&self) -> String {
         match self {
-            Condition::PriceAbove { target } => format!("가격 ≥ {target}"),
-            Condition::PriceBelow { target } => format!("가격 ≤ {target}"),
+            Condition::PriceAbove { target } => format!("가격 ≥ {}", fmt_num(*target)),
+            Condition::PriceBelow { target } => format!("가격 ≤ {}", fmt_num(*target)),
             Condition::ProfitAbove { percentage } => format!("수익률 ≥ {percentage}%"),
             Condition::ProfitBelow { percentage } => format!("수익률 ≤ {percentage}%"),
         }

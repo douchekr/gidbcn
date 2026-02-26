@@ -14,26 +14,10 @@ use crate::storage;
 pub enum Command {
     #[command(description = "도움말")]
     Help,
-    #[command(description = "종목 추가: /add [마켓] [종목코드] [수량] [매입가] [종목명]")]
-    Add(String),
-    #[command(description = "종목 삭제: /remove [종목코드]")]
-    Remove(String),
-    #[command(description = "종목 수정: /edit [종목코드] [수량] [매입가]")]
-    Edit(String),
-    #[command(description = "포트폴리오 현황")]
-    List,
-    #[command(description = "종목 상세: /info [종목코드]")]
-    Info(String),
-    #[command(description = "포트폴리오 요약")]
-    Summary,
-    #[command(description = "시그널 설정: /signal [종목코드] [조건] [파라미터...]")]
+    #[command(description = "포트폴리오: /port add|remove|edit|list|info|summary ...")]
+    Port(String),
+    #[command(description = "시그널: /signal add|list|remove|clear ...")]
     Signal(String),
-    #[command(description = "시그널 목록")]
-    SignalList,
-    #[command(description = "시그널 삭제: /signal_remove [시그널ID]")]
-    SignalRemove(String),
-    #[command(description = "종목 시그널 전체 삭제: /signal_clear [종목코드]")]
-    SignalClear(String),
     #[command(description = "시스템 상태")]
     Status,
     #[command(description = "핑")]
@@ -60,16 +44,8 @@ pub async fn handle_command(
     let reply = match cmd {
         Command::Help => help_text(),
         Command::Ping => "pong".to_string(),
-        Command::Add(args) => cmd_add(user_id, &args),
-        Command::Remove(args) => cmd_remove(user_id, &args),
-        Command::Edit(args) => cmd_edit(user_id, &args),
-        Command::List => cmd_list(user_id, &api).await,
-        Command::Info(args) => cmd_info(user_id, &args, &api).await,
-        Command::Summary => cmd_summary(user_id, &api).await,
+        Command::Port(args) => cmd_port(user_id, &args, &api).await,
         Command::Signal(args) => cmd_signal(user_id, &args),
-        Command::SignalList => cmd_signal_list(user_id),
-        Command::SignalRemove(args) => cmd_signal_remove(user_id, &args),
-        Command::SignalClear(args) => cmd_signal_clear(user_id, &args),
         Command::Status => cmd_status(user_id),
     };
 
@@ -85,26 +61,47 @@ fn kst_now() -> chrono::DateTime<FixedOffset> {
 fn help_text() -> String {
     "📋 명령어 목록\n\n\
      포트폴리오:\n\
-     /add [마켓] [종목코드] [수량] [매입가] [종목명]\n\
-     /remove [종목코드]\n\
-     /edit [종목코드] [수량] [매입가]\n\
-     /list — 전체 포트폴리오\n\
-     /info [종목코드] — 종목 상세\n\
-     /summary — 자산배분 요약\n\n\
+     /port add [마켓] [종목코드] [수량] [매입가] [종목명]\n\
+     /port remove [종목코드]\n\
+     /port edit [종목코드] [수량] [매입가]\n\
+     /port list — 전체 포트폴리오\n\
+     /port info [종목코드] — 종목 상세\n\
+     /port summary — 자산배분 요약\n\n\
      시그널:\n\
-     /signal [종목코드] [조건] [파라미터...]\n\
-     /signal_list — 전체 시그널\n\
-     /signal_remove [시그널ID]\n\
-     /signal_clear [종목코드]\n\n\
+     /signal add [종목코드] [> 또는 <] [값 또는 수익률%]\n\
+     /signal list — 전체 시그널\n\
+     /signal remove [시그널ID]\n\
+     /signal clear [종목코드]\n\n\
      시스템:\n\
      /status — 시스템 상태\n\
      /ping — 핑\n\n\
      마켓: KRX, NAS, NYS, AMS, BOND\n\
-     조건: price_above, price_below, profit_above, profit_below"
+     조건: > [가격], < [가격], > [수익률%], < [수익률%]"
         .to_string()
 }
 
 // --- 포트폴리오 ---
+
+async fn cmd_port(user_id: i64, args: &str, api: &ApiHandle) -> String {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    let rest = parts.get(1..).unwrap_or(&[]).join(" ");
+    match parts.first().copied() {
+        Some("add")     => cmd_add(user_id, &rest),
+        Some("remove")  => cmd_remove(user_id, &rest),
+        Some("edit")    => cmd_edit(user_id, &rest),
+        Some("list")    => cmd_list(user_id, api).await,
+        Some("info")    => cmd_info(user_id, &rest, api).await,
+        Some("summary") => cmd_summary(user_id, api).await,
+        _ => "사용법:\n\
+              /port add [마켓] [종목코드] [수량] [매입가] [종목명]\n\
+              /port remove [종목코드]\n\
+              /port edit [종목코드] [수량] [매입가]\n\
+              /port list\n\
+              /port info [종목코드]\n\
+              /port summary"
+            .to_string(),
+    }
+}
 
 fn cmd_add(user_id: i64, args: &str) -> String {
     let parts: Vec<&str> = args.split_whitespace().collect();
@@ -399,20 +396,17 @@ async fn cmd_summary(user_id: i64, api: &ApiHandle) -> String {
 
     format!(
         "📊 포트폴리오 요약\n\
-         🇰🇷 국내: {:.0}원 ({})\n\
-         🇺🇸 미국: {:.0}원 ({})\n\
-         🏛 채권: {:.0}원 ({})\n\
+         🇰🇷 국내: {}원 ({})\n\
+         🇺🇸 미국: {}원 ({})\n\
+         🏛 채권: {}원 ({})\n\
          ──────────\n\
-         💰 총 평가: {:.0}원\n\
-         💵 총 손익: {sign}{:.0}원 ({sign}{:.1}%)",
-        domestic_val,
-        fmt_pct(domestic_val),
-        overseas_val,
-        fmt_pct(overseas_val),
-        bond_val,
-        fmt_pct(bond_val),
-        total,
-        pnl,
+         💰 총 평가: {}원\n\
+         💵 총 손익: {sign}{}원 ({sign}{:.1}%)",
+        formatter::fmt_int(domestic_val), fmt_pct(domestic_val),
+        formatter::fmt_int(overseas_val), fmt_pct(overseas_val),
+        formatter::fmt_int(bond_val),     fmt_pct(bond_val),
+        formatter::fmt_int(total),
+        formatter::fmt_int(pnl),
         pnl_pct,
     )
 }
@@ -421,37 +415,43 @@ async fn cmd_summary(user_id: i64, api: &ApiHandle) -> String {
 
 fn cmd_signal(user_id: i64, args: &str) -> String {
     let parts: Vec<&str> = args.split_whitespace().collect();
-    if parts.len() < 3 {
-        return "사용법: /signal [종목코드] [조건타입] [파라미터...]\n\
-                예: /signal 005930 price_above 80000\n\
-                예: /signal TSLA golden_cross 5 20"
-            .to_string();
+    match parts.first().copied() {
+        Some("list") => cmd_signal_list(user_id),
+        Some("remove") => cmd_signal_remove(user_id, parts.get(1).copied().unwrap_or("")),
+        Some("clear") => cmd_signal_clear(user_id, parts.get(1).copied().unwrap_or("")),
+        Some("add") => {
+            if parts.len() < 4 {
+                return "사용법: /signal add [종목코드] [> 또는 <] [값 또는 수익률%]\n\
+                        예: /signal add 005930 > 80000\n\
+                        예: /signal add 005930 > 10%"
+                    .to_string();
+            }
+            let symbol = parts[1];
+            let condition = match parse_condition(parts[2], &parts[3..]) {
+                Ok(c) => c,
+                Err(e) => return e,
+            };
+            let mut store = storage::load_signals(user_id);
+            let id = store.next_signal_id();
+            store.signals.push(Signal {
+                id: id.clone(),
+                symbol: symbol.to_string(),
+                condition: condition.clone(),
+                active: true,
+                created_at: kst_now(),
+            });
+            if let Err(e) = storage::save_signals(user_id, &store) {
+                return format!("저장 실패: {e}");
+            }
+            format!("✅ 시그널 설정 완료 [{id}]\n{symbol}: {}", condition.display_description())
+        }
+        _ => "사용법:\n\
+              /signal add [종목코드] [> 또는 <] [값 또는 수익률%]\n\
+              /signal list\n\
+              /signal remove [시그널ID]\n\
+              /signal clear [종목코드]"
+            .to_string(),
     }
-
-    let symbol = parts[0];
-    let condition = match parse_condition(parts[1], &parts[2..]) {
-        Ok(c) => c,
-        Err(e) => return e,
-    };
-
-    let mut store = storage::load_signals(user_id);
-    let id = store.next_signal_id();
-    store.signals.push(Signal {
-        id: id.clone(),
-        symbol: symbol.to_string(),
-        condition: condition.clone(),
-        active: true,
-        created_at: kst_now(),
-    });
-
-    if let Err(e) = storage::save_signals(user_id, &store) {
-        return format!("저장 실패: {e}");
-    }
-
-    format!(
-        "✅ 시그널 설정 완료 [{id}]\n{symbol}: {}",
-        condition.display_description()
-    )
 }
 
 fn cmd_signal_list(user_id: i64) -> String {
@@ -460,13 +460,24 @@ fn cmd_signal_list(user_id: i64) -> String {
         return "설정된 시그널이 없습니다.".to_string();
     }
 
+    let portfolio = storage::load_portfolio(user_id);
+
     let mut msg = "⚡ 시그널 목록\n".to_string();
     for s in &store.signals {
         let status = if s.active { "🟢" } else { "⚫" };
+        let name = portfolio.holdings.iter()
+            .find(|h| h.symbol == s.symbol)
+            .map(|h| h.name.as_str())
+            .unwrap_or("");
+        let display = if name.is_empty() {
+            s.symbol.clone()
+        } else {
+            format!("{} {}", s.symbol, name)
+        };
         msg.push_str(&format!(
             "\n{status} [{}] {} — {}",
             s.id,
-            s.symbol,
+            display,
             s.condition.display_description()
         ));
     }
@@ -531,35 +542,20 @@ fn cmd_status(user_id: i64) -> String {
 }
 
 fn parse_condition(cond_type: &str, params: &[&str]) -> Result<Condition, String> {
-    match cond_type {
-        "price_above" => {
-            let target = parse_param_f64(params, 0, "target")?;
-            Ok(Condition::PriceAbove { target })
-        }
-        "price_below" => {
-            let target = parse_param_f64(params, 0, "target")?;
-            Ok(Condition::PriceBelow { target })
-        }
-        "profit_above" => {
-            let percentage = parse_param_f64(params, 0, "percentage")?;
-            Ok(Condition::ProfitAbove { percentage })
-        }
-        "profit_below" => {
-            let percentage = parse_param_f64(params, 0, "percentage")?;
-            Ok(Condition::ProfitBelow { percentage })
-        }
+    let value_str = params.get(0).ok_or("값을 입력하세요.")?;
+    let is_percent = value_str.ends_with('%');
+    let num_str = if is_percent { value_str.trim_end_matches('%') } else { value_str };
+    let num: f64 = num_str.parse().map_err(|_| format!("잘못된 값: {value_str}"))?;
+
+    match (cond_type, is_percent) {
+        (">", false) => Ok(Condition::PriceAbove { target: num }),
+        ("<", false) => Ok(Condition::PriceBelow { target: num }),
+        (">", true)  => Ok(Condition::ProfitAbove { percentage: num }),
+        ("<", true)  => Ok(Condition::ProfitBelow { percentage: num }),
         _ => Err(format!(
             "알 수 없는 조건: {cond_type}\n\
-             사용 가능: price_above, price_below, profit_above, profit_below"
+             사용 가능: > [가격], < [가격], > [수익률%], < [수익률%]"
         )),
     }
-}
-
-fn parse_param_f64(params: &[&str], idx: usize, name: &str) -> Result<f64, String> {
-    params
-        .get(idx)
-        .ok_or_else(|| format!("{name} 파라미터가 필요합니다."))?
-        .parse::<f64>()
-        .map_err(|_| format!("{name}은(는) 숫자여야 합니다."))
 }
 

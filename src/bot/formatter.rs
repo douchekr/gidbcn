@@ -3,7 +3,7 @@ use crate::models::portfolio::{Holding, Market};
 use crate::models::signal::Signal;
 
 /// 정수를 3자리 콤마 포맷 (예: 70000 → "70,000")
-fn fmt_int(v: f64) -> String {
+pub fn fmt_int(v: f64) -> String {
     let n = v as i64;
     if n == 0 {
         return "0".to_string();
