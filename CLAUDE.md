@@ -45,7 +45,6 @@
 enum ApiRequest {
     GetDomesticPrice { symbol: String, respond_to: oneshot::Sender<Result<PriceData>> },
     GetOverseasPrice { exchange: String, symbol: String, respond_to: oneshot::Sender<Result<PriceData>> },
-    GetDailyChart { market: Market, symbol: String, respond_to: oneshot::Sender<Result<Vec<DailyCandle>>> },
     GetBondPrice { isin: String, respond_to: oneshot::Sender<Result<BondData>> },
     GetExchangeRate { respond_to: oneshot::Sender<Result<f64>> },
     RefreshToken, // fire-and-forget
@@ -94,8 +93,8 @@ gidbcn/
     │   ├── mod.rs
     │   ├── actor.rs       ← ApiActor 수신 루프 + ApiHandle
     │   ├── auth.rs        ← OAuth 토큰 발급/갱신
-    │   ├── domestic.rs    ← 국내주식 현재가 + 일봉
-    │   ├── overseas.rs    ← 해외주식 현재가 + 일봉
+    │   ├── domestic.rs    ← 국내주식 현재가 (inquire-daily-itemchartprice output1)
+    │   ├── overseas.rs    ← 해외주식 현재가
     │   ├── bond.rs        ← 국내채권 현재가
     │   └── exchange.rs    ← 환율 조회
     ├── bot/
@@ -106,10 +105,8 @@ gidbcn/
     ├── signal/
     │   ├── mod.rs
     │   ├── engine.rs      ← 시그널 조건 평가 엔진
-    │   ├── price.rs       ← price_above/below, profit_above/below
-    │   ├── technical.rs   ← golden_cross, dead_cross, RSI
-    │   └── volume.rs      ← volume_surge
-    ├── storage.rs         ← portfolio/signals/alert_log JSON CRUD (동기)
+    │   └── price.rs       ← price_above/below, profit_above/below
+    ├── storage.rs         ← portfolio/signals JSON CRUD (동기)
     ├── scheduler.rs       ← tokio::time::interval 기반
     └── models/
         ├── mod.rs
@@ -170,36 +167,25 @@ tr_id: {거래ID}
 - Body: `{ "grant_type": "client_credentials", "appkey": "...", "appsecret": "..." }`
 - 응답: `access_token`, `expires_in` (86400초)
 
-#### 1. 국내주식 현재가
-- GET `/uapi/domestic-stock/v1/quotations/inquire-price`
-- tr_id: `FHKST01010100`
-- Query: `FID_COND_MRKT_DIV_CODE=J`, `FID_INPUT_ISCD={종목코드6자리}`
-- 응답: `stck_prpr`(현재가), `prdy_vrss`(전일대비), `prdy_ctrt`(등락률), `acml_vol`(거래량)
-
-#### 2. 국내주식 일봉
+#### 1. 국내주식 현재가 + 종목명
 - GET `/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice`
 - tr_id: `FHKST03010100`
-- Query: `FID_COND_MRKT_DIV_CODE=J`, `FID_INPUT_ISCD`, `FID_INPUT_DATE_1`, `FID_INPUT_DATE_2`, `FID_PERIOD_DIV_CODE=D`
-- 응답: `stck_clpr`(종가), `stck_oprc`(시가), `stck_hgpr`(고가), `stck_lwpr`(저가), `acml_vol`(거래량), `stck_bsop_date`(일자)
+- Query: `FID_COND_MRKT_DIV_CODE=J`, `FID_INPUT_ISCD={종목코드6자리}`, `FID_INPUT_DATE_1=오늘`, `FID_INPUT_DATE_2=오늘`, `FID_PERIOD_DIV_CODE=D`, `FID_ORG_ADJ_PRC=0`
+- 응답 (`output1`): `hts_kor_isnm`(종목명), `stck_prpr`(현재가), `prdy_vrss`(전일대비), `prdy_ctrt`(등락률), `acml_vol`(거래량)
+- **주의**: `inquire-price` 엔드포인트는 `hts_kor_isnm` 미포함. 종목명은 반드시 이 엔드포인트 사용.
 
-#### 3. 해외주식 현재가
+#### 2. 해외주식 현재가
 - GET `/uapi/overseas-price/v1/quotations/price`
 - tr_id: `HHDFS00000300`
 - Query: `AUTH=""`, `EXCD={NAS|NYS|AMS}`, `SYMB={티커}`
 - 응답: `last`(현재가), `diff`(전일대비), `rate`(등락률), `tvol`(거래량), `name`(종목명)
 
-#### 4. 해외주식 일봉
-- GET `/uapi/overseas-price/v1/quotations/dailyprice`
-- tr_id: `HHDFS76240000`
-- Query: `AUTH=""`, `EXCD`, `SYMB`, `GUBN=0`(일), `BYMD={YYYYMMDD}`, `MODP=1`(수정주가)
-- 응답: `clos`(종가), `open`(시가), `high`(고가), `low`(저가), `tvol`(거래량), `xymd`(일자)
-
-#### 5. 국내채권 현재가
+#### 3. 국내채권 현재가
 - GET `/uapi/domestic-bond/v1/quotations/inquire-price`
 - tr_id: `FHKBJ773000C0`
 - Query: `FID_COND_MRKT_DIV_CODE=B`, `FID_INPUT_ISCD={ISIN 12자리}`
 
-#### 6. 환율 조회
+#### 4. 환율 조회
 - GET `/uapi/overseas-stock/v1/quotations/inquire-exchange-rate`
 - 하루 2회 캐싱 (08:50, 15:40) → config.json의 exchange_rate에 저장
 
@@ -238,12 +224,11 @@ tr_id: {거래ID}
 ### portfolio.json
 ```json
 {
-  "next_id": 4,
   "holdings": [
     {
-      "id": "h_001",
       "market": "KRX",
       "symbol": "005930",
+      "name": "삼성전자",
       "quantity": 10,
       "avg_price": 70000.0,
       "added_at": "2026-02-26T10:00:00+09:00"
@@ -252,8 +237,7 @@ tr_id: {거래ID}
 }
 ```
 - market: `KRX` | `NAS` | `NYS` | `AMS` | `BOND`
-- ID: 자동 증가 (h_001, h_002, ...)
-- 종목명: 저장 안 함 (한투 API 응답에서 가져옴)
+- `name`: /list 첫 조회 시 API에서 자동 캐싱. /add 시 선택적으로 직접 입력 가능.
 
 ### signals.json
 ```json
@@ -279,13 +263,8 @@ tr_id: {거래ID}
 |---|---|---|
 | `price_above` | `{ target: f64 }` | 현재가 ≥ target |
 | `price_below` | `{ target: f64 }` | 현재가 ≤ target |
-| `profit_above` | `{ percentage: f64 }` | 수익률 ≥ %  (매입가 대비) |
+| `profit_above` | `{ percentage: f64 }` | 수익률 ≥ % (매입가 대비) |
 | `profit_below` | `{ percentage: f64 }` | 수익률 ≤ % |
-| `golden_cross` | `{ short_period: u32, long_period: u32 }` | 단기MA 상향돌파 |
-| `dead_cross` | `{ short_period: u32, long_period: u32 }` | 단기MA 하향돌파 |
-| `rsi_above` | `{ threshold: f64 }` | RSI ≥ threshold |
-| `rsi_below` | `{ threshold: f64 }` | RSI ≤ threshold |
-| `volume_surge` | `{ threshold_pct: f64 }` | 거래량 ≥ 20일평균 × pct% |
 
 **시그널 동작**: 1회성 발동 → 자동 비활성화 (active: false). 재설정 필요.
 
@@ -315,7 +294,7 @@ tr_id: {거래ID}
 ### 포트폴리오 관리
 | 명령어 | 설명 |
 |---|---|
-| `/add [마켓] [종목코드] [수량] [매입가]` | 종목 추가 |
+| `/add [마켓] [종목코드] [수량] [매입가] [종목명]` | 종목 추가 (종목명 생략 시 API에서 자동 조회) |
 | `/remove [종목코드]` | 종목 삭제 |
 | `/edit [종목코드] [수량] [매입가]` | 종목 수정 |
 | `/list` | 전체 포트폴리오 + 현재가 + 손익 |
@@ -354,9 +333,8 @@ tr_id: {거래ID}
 | 작업 | 주기 | 조건 |
 |---|---|---|
 | 시그널 체크 (현재가) | 5분 | 장중에만 (KRX: 09:00~15:30, US: 22:30~05:00 KST) |
-| 일봉 수집 + 기술적 시그널 | 1일 1회 | KRX 장 마감 후 16:00, US 장 마감 후 06:00 KST |
 | 환율 조회 | 1일 2회 | 08:50, 15:40 |
-| 토큰 갱신 | 만료 1시간 전 | `expires_at` 기준 자동 판단 |
+| 토큰 갱신 | 만료 1시간 전 | `expires_at` 기준 자동 판단 (API Actor가 매 요청 전 체크) |
 
 ---
 
@@ -446,7 +424,7 @@ tracing-subscriber = "0.3"
 
 ⚡ 설정된 시그널:
 • 가격 ≥ 80,000 → 알림
-• RSI ≤ 30 → 알림
+• 수익률 ≥ 20% → 알림
 ```
 
 ### /summary
