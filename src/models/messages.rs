@@ -12,7 +12,7 @@ pub struct PriceData {
     pub volume: u64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DailyCandle {
     pub date: String,
     pub open: f64,

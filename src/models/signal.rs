@@ -96,3 +96,68 @@ impl SignalStore {
         id
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn condition_serde_roundtrip() {
+        let cond = Condition::PriceAbove { target: 80000.0 };
+        let json = serde_json::to_string(&cond).unwrap();
+        assert!(json.contains("price_above"));
+        let parsed: Condition = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Condition::PriceAbove { target } => assert_eq!(target, 80000.0),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn condition_serde_golden_cross() {
+        let cond = Condition::GoldenCross {
+            short_period: 5,
+            long_period: 20,
+        };
+        let json = serde_json::to_string(&cond).unwrap();
+        let parsed: Condition = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Condition::GoldenCross {
+                short_period,
+                long_period,
+            } => {
+                assert_eq!(short_period, 5);
+                assert_eq!(long_period, 20);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn condition_needs_daily_chart() {
+        assert!(!Condition::PriceAbove { target: 100.0 }.needs_daily_chart());
+        assert!(!Condition::ProfitBelow { percentage: -5.0 }.needs_daily_chart());
+        assert!(Condition::GoldenCross { short_period: 5, long_period: 20 }.needs_daily_chart());
+        assert!(Condition::RsiAbove { threshold: 70.0 }.needs_daily_chart());
+        assert!(Condition::VolumeSurge { threshold_pct: 200.0 }.needs_daily_chart());
+    }
+
+    #[test]
+    fn condition_display_description() {
+        assert_eq!(
+            Condition::PriceAbove { target: 80000.0 }.display_description(),
+            "가격 ≥ 80000"
+        );
+        assert_eq!(
+            Condition::RsiBelow { threshold: 30.0 }.display_description(),
+            "RSI ≤ 30"
+        );
+    }
+
+    #[test]
+    fn next_signal_id_increments() {
+        let mut store = SignalStore::default();
+        assert_eq!(store.next_signal_id(), "s_001");
+        assert_eq!(store.next_signal_id(), "s_002");
+    }
+}

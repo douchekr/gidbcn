@@ -10,11 +10,11 @@ use crate::models::signal::{Condition, Signal};
 use crate::storage;
 
 #[derive(BotCommands, Clone)]
-#[command(rename_rule = "lowercase")]
+#[command(rename_rule = "snake_case")]
 pub enum Command {
     #[command(description = "도움말")]
     Help,
-    #[command(description = "종목 추가: /add [마켓] [종목코드] [수량] [매입가]")]
+    #[command(description = "종목 추가: /add [마켓] [종목코드] [수량] [매입가] [종목명]")]
     Add(String),
     #[command(description = "종목 삭제: /remove [종목코드]")]
     Remove(String),
@@ -75,7 +75,7 @@ fn kst_now() -> chrono::DateTime<FixedOffset> {
 fn help_text() -> String {
     "📋 명령어 목록\n\n\
      포트폴리오:\n\
-     /add [마켓] [종목코드] [수량] [매입가]\n\
+     /add [마켓] [종목코드] [수량] [매입가] [종목명]\n\
      /remove [종목코드]\n\
      /edit [종목코드] [수량] [매입가]\n\
      /list — 전체 포트폴리오\n\
@@ -100,7 +100,7 @@ fn help_text() -> String {
 fn cmd_add(args: &str) -> String {
     let parts: Vec<&str> = args.split_whitespace().collect();
     if parts.len() < 4 {
-        return "사용법: /add [마켓] [종목코드] [수량] [매입가]\n예: /add KRX 005930 10 70000".to_string();
+        return "사용법: /add [마켓] [종목코드] [수량] [매입가] [종목명]\n예: /add KRX 005930 10 70000 삼성전자".to_string();
     }
 
     let market = match Market::from_str(parts[0]) {
@@ -116,6 +116,11 @@ fn cmd_add(args: &str) -> String {
         Ok(v) => v,
         Err(_) => return "매입가는 숫자여야 합니다.".to_string(),
     };
+    let name = if parts.len() > 4 {
+        parts[4..].join(" ")
+    } else {
+        String::new()
+    };
 
     let mut store = storage::load_portfolio();
     if store.holdings.iter().any(|h| h.symbol == symbol) {
@@ -127,6 +132,7 @@ fn cmd_add(args: &str) -> String {
         id: id.clone(),
         market,
         symbol: symbol.clone(),
+        name,
         quantity,
         avg_price,
         added_at: kst_now(),
@@ -193,7 +199,7 @@ fn cmd_edit(args: &str) -> String {
 }
 
 async fn cmd_list(api: &ApiHandle) -> String {
-    let store = storage::load_portfolio();
+    let mut store = storage::load_portfolio();
     if store.holdings.is_empty() {
         return "포트폴리오가 비어있습니다. /add 로 종목을 추가하세요.".to_string();
     }
@@ -206,20 +212,53 @@ async fn cmd_list(api: &ApiHandle) -> String {
     let mut domestic = Vec::new();
     let mut overseas = Vec::new();
     let mut bonds = Vec::new();
+    let mut names_updated = false;
+    let mut total_eval = 0.0f64;
+    let mut total_cost = 0.0f64;
+    let mut has_price = false;
 
-    for h in &store.holdings {
-        let price = match api.get_price_for_market(h.market, &h.symbol).await {
-            Ok(p) => p,
+    for h in &mut store.holdings {
+        match api.get_price_for_market(h.market, &h.symbol).await {
+            Ok(price) => {
+                if !price.name.is_empty() && h.name != price.name {
+                    h.name = price.name.clone();
+                    names_updated = true;
+                }
+                let eval = price.current_price * h.quantity;
+                let cost = h.avg_price * h.quantity;
+                match h.market {
+                    Market::NAS | Market::NYS | Market::AMS => {
+                        total_eval += eval * usd_krw;
+                        total_cost += cost * usd_krw;
+                    }
+                    _ => {
+                        total_eval += eval;
+                        total_cost += cost;
+                    }
+                }
+                has_price = true;
+                let line = formatter::format_holding_line(h, &price, usd_krw);
+                match h.market {
+                    Market::KRX => domestic.push(line),
+                    Market::NAS | Market::NYS | Market::AMS => overseas.push(line),
+                    Market::BOND => bonds.push(line),
+                }
+            }
             Err(e) => {
                 tracing::warn!("Failed to get price for {}: {e}", h.symbol);
-                continue;
+                let line = formatter::format_holding_line_no_price(h);
+                match h.market {
+                    Market::KRX => domestic.push(line),
+                    Market::NAS | Market::NYS | Market::AMS => overseas.push(line),
+                    Market::BOND => bonds.push(line),
+                }
             }
-        };
-        let line = formatter::format_holding_line(h, &price, usd_krw);
-        match h.market {
-            Market::KRX => domestic.push(line),
-            Market::NAS | Market::NYS | Market::AMS => overseas.push(line),
-            Market::BOND => bonds.push(line),
+        }
+    }
+
+    if names_updated {
+        if let Err(e) = storage::save_portfolio(&store) {
+            tracing::warn!("Failed to save portfolio names: {e}");
         }
     }
 
@@ -234,6 +273,18 @@ async fn cmd_list(api: &ApiHandle) -> String {
     if !bonds.is_empty() {
         msg.push_str("\n\n🏛 채권\n");
         msg.push_str(&bonds.join("\n"));
+    }
+
+    if has_price {
+        let pnl = total_eval - total_cost;
+        let pnl_pct = if total_cost > 0.0 { pnl / total_cost * 100.0 } else { 0.0 };
+        let sign = if pnl >= 0.0 { "+" } else { "" };
+        msg.push_str(&format!(
+            "\n\n──────────\n💰 총 평가: {}원\n💵 총 손익: {sign}{}원 ({sign}{:.1}%)",
+            formatter::fmt_quantity(total_eval),
+            formatter::fmt_quantity(pnl),
+            pnl_pct,
+        ));
     }
 
     msg
@@ -251,11 +302,6 @@ async fn cmd_info(args: &str, api: &ApiHandle) -> String {
         None => return format!("{symbol} 을(를) 포트폴리오에서 찾을 수 없습니다."),
     };
 
-    let price = match api.get_price_for_market(holding.market, symbol).await {
-        Ok(p) => p,
-        Err(e) => return format!("시세 조회 실패: {e}"),
-    };
-
     let signal_store = storage::load_signals();
     let signals: Vec<&Signal> = signal_store
         .signals
@@ -263,7 +309,30 @@ async fn cmd_info(args: &str, api: &ApiHandle) -> String {
         .filter(|s| s.symbol == symbol && s.active)
         .collect();
 
-    formatter::format_info(holding, &price, &signals)
+    match api.get_price_for_market(holding.market, symbol).await {
+        Ok(price) => formatter::format_info(holding, &price, &signals),
+        Err(e) => {
+            tracing::warn!("Failed to get price for {symbol}: {e}");
+            let display_name = if holding.name.is_empty() {
+                "-".to_string()
+            } else {
+                holding.name.clone()
+            };
+            let mut msg = format!(
+                "📈 {} {}\n매입가: {} × {}\n현재가: - (조회 불가)",
+                holding.symbol, display_name,
+                formatter::fmt_price(&holding.market, holding.avg_price),
+                formatter::fmt_quantity(holding.quantity),
+            );
+            if !signals.is_empty() {
+                msg.push_str("\n\n⚡ 설정된 시그널:");
+                for s in &signals {
+                    msg.push_str(&format!("\n• {} → 알림", s.condition.display_description()));
+                }
+            }
+            msg
+        }
+    }
 }
 
 async fn cmd_summary(api: &ApiHandle) -> String {
@@ -444,17 +513,13 @@ fn cmd_status() -> String {
     let portfolio = storage::load_portfolio();
     let signals = storage::load_signals();
     let active = signals.signals.iter().filter(|s| s.active).count();
-    let alerts = storage::load_alert_log();
-
     format!(
         "📊 시스템 상태\n\
          종목 수: {}\n\
-         시그널: {} (활성 {})\n\
-         알림 기록: {}건",
+         시그널: {} (활성 {})",
         portfolio.holdings.len(),
         signals.signals.len(),
         active,
-        alerts.alerts.len(),
     )
 }
 

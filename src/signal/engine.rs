@@ -11,7 +11,6 @@ use super::{price, technical, volume};
 pub async fn check_all_signals(api: &ApiHandle, bot: &Bot, chat_id: ChatId) {
     let portfolio = storage::load_portfolio();
     let mut signal_store = storage::load_signals();
-    let mut alert_log = storage::load_alert_log();
     let mut any_triggered = false;
 
     // 활성 시그널만 처리
@@ -75,31 +74,14 @@ pub async fn check_all_signals(api: &ApiHandle, bot: &Bot, chat_id: ChatId) {
             );
 
             // 텔레그램 전송
-            let success = match bot.send_message(chat_id, &alert_msg).await {
+            match bot.send_message(chat_id, &alert_msg).await {
                 Ok(_) => {
                     tracing::info!("Signal triggered: {} {}", signal.id, condition_desc);
-                    true
                 }
                 Err(e) => {
                     tracing::error!("Failed to send alert for {}: {e}", signal.id);
-                    false
                 }
-            };
-
-            // 알림 기록
-            let alert_id = alert_log.next_alert_id();
-            alert_log.alerts.push(crate::models::AlertRecord {
-                id: alert_id,
-                signal_id: signal.id.clone(),
-                symbol: symbol.clone(),
-                condition_type: signal.condition.type_name().to_string(),
-                trigger_value: price_data.current_price,
-                message: alert_msg,
-                sent_at: chrono::Utc::now().with_timezone(
-                    &chrono::FixedOffset::east_opt(9 * 3600).unwrap(),
-                ),
-                success,
-            });
+            }
 
             // 1회성 발동 → 비활성화
             signal_store.signals[idx].active = false;
@@ -109,9 +91,6 @@ pub async fn check_all_signals(api: &ApiHandle, bot: &Bot, chat_id: ChatId) {
     if any_triggered {
         if let Err(e) = storage::save_signals(&signal_store) {
             tracing::error!("Failed to save signals after trigger: {e}");
-        }
-        if let Err(e) = storage::save_alert_log(&alert_log) {
-            tracing::error!("Failed to save alert log: {e}");
         }
     }
 }

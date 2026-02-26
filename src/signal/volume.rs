@@ -28,3 +28,47 @@ fn check_volume_surge(candles: &[DailyCandle], current_volume: u64, threshold_pc
     let ratio = current_volume as f64 / avg_volume * 100.0;
     ratio >= threshold_pct
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_candle(volume: u64) -> DailyCandle {
+        DailyCandle {
+            date: String::new(),
+            open: 0.0,
+            high: 0.0,
+            low: 0.0,
+            close: 0.0,
+            volume,
+        }
+    }
+
+    #[test]
+    fn volume_surge_triggered() {
+        // 20일 평균 1000, 현재 2500 → 250% ≥ 200%
+        let candles: Vec<_> = (0..20).map(|_| make_candle(1000)).collect();
+        let cond = Condition::VolumeSurge { threshold_pct: 200.0 };
+        assert!(evaluate(&cond, &candles, 2500));
+    }
+
+    #[test]
+    fn volume_surge_not_triggered() {
+        let candles: Vec<_> = (0..20).map(|_| make_candle(1000)).collect();
+        let cond = Condition::VolumeSurge { threshold_pct: 200.0 };
+        assert!(!evaluate(&cond, &candles, 1500)); // 150% < 200%
+    }
+
+    #[test]
+    fn volume_surge_empty_candles() {
+        let cond = Condition::VolumeSurge { threshold_pct: 200.0 };
+        assert!(!evaluate(&cond, &[], 5000));
+    }
+
+    #[test]
+    fn volume_surge_fewer_than_20_candles() {
+        let candles: Vec<_> = (0..5).map(|_| make_candle(1000)).collect();
+        let cond = Condition::VolumeSurge { threshold_pct: 200.0 };
+        assert!(evaluate(&cond, &candles, 2000)); // 200% ≥ 200%
+    }
+}

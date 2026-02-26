@@ -1,12 +1,10 @@
 use anyhow::{Context, Result};
 
-use crate::models::AlertLog;
 use crate::models::portfolio::PortfolioStore;
 use crate::models::signal::SignalStore;
 
 const PORTFOLIO_PATH: &str = "data/portfolio.json";
 const SIGNALS_PATH: &str = "data/signals.json";
-const ALERT_LOG_PATH: &str = "data/alert_log.json";
 
 fn load_or_default<T: serde::de::DeserializeOwned + Default + serde::Serialize>(
     path: &str,
@@ -53,12 +51,3 @@ pub fn save_signals(store: &SignalStore) -> Result<()> {
     save(SIGNALS_PATH, store)
 }
 
-// --- Alert Log ---
-
-pub fn load_alert_log() -> AlertLog {
-    load_or_default(ALERT_LOG_PATH)
-}
-
-pub fn save_alert_log(log: &AlertLog) -> Result<()> {
-    save(ALERT_LOG_PATH, log)
-}
