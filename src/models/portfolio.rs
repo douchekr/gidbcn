@@ -58,6 +58,10 @@ pub struct Holding {
     pub quantity: f64,
     pub avg_price: f64,
     pub added_at: DateTime<FixedOffset>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_price: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_at: Option<DateTime<FixedOffset>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -106,6 +110,8 @@ mod tests {
                 avg_price: 70000.0,
                 added_at: chrono::Utc::now()
                     .with_timezone(&chrono::FixedOffset::east_opt(9 * 3600).unwrap()),
+                cached_price: None,
+                cached_at: None,
             }],
         };
         let json = serde_json::to_string(&store).unwrap();

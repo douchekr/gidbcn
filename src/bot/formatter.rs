@@ -116,6 +116,13 @@ pub fn format_holding_line(h: &Holding, price: &PriceData, _usd_krw: f64) -> Str
     }
 }
 
+/// 캐시 가격으로 holding line 생성 (가격에 `*` 마커 추가)
+pub fn format_holding_line_cached(h: &Holding, price: &PriceData, usd_krw: f64) -> String {
+    let line = format_holding_line(h, price, usd_krw);
+    // 마지막 `%` 뒤에 `*` 추가: "…| +3.6%" → "…| +3.6%*"
+    format!("{line}*")
+}
+
 pub fn format_info(h: &Holding, price: &PriceData, signals: &[&Signal]) -> String {
     let pnl = (price.current_price - h.avg_price) * h.quantity;
     let pnl_pct = if h.avg_price > 0.0 {
@@ -211,6 +218,8 @@ mod tests {
             quantity: qty,
             avg_price: avg,
             added_at: Utc::now().with_timezone(&FixedOffset::east_opt(9 * 3600).unwrap()),
+            cached_price: None,
+            cached_at: None,
         }
     }
 

@@ -5,6 +5,7 @@ use teloxide::utils::command::BotCommands;
 
 use crate::api::ApiHandle;
 use crate::bot::formatter;
+use crate::models::messages::PriceData;
 use crate::models::portfolio::{Holding, Market};
 use crate::models::signal::{Condition, Signal};
 use crate::storage;
@@ -140,6 +141,8 @@ fn cmd_add(user_id: i64, args: &str) -> String {
         quantity,
         avg_price,
         added_at: kst_now(),
+        cached_price: None,
+        cached_at: None,
     });
 
     if let Err(e) = storage::save_portfolio(user_id, &store) {
@@ -216,18 +219,22 @@ async fn cmd_list(user_id: i64, api: &ApiHandle) -> String {
     let mut domestic = Vec::new();
     let mut overseas = Vec::new();
     let mut bonds = Vec::new();
-    let mut names_updated = false;
+    let mut holdings_updated = false;
     let mut total_eval = 0.0f64;
     let mut total_cost = 0.0f64;
     let mut has_price = false;
+    let mut has_cached = false;
+    let mut failed_symbols: Vec<String> = Vec::new();
 
     for h in &mut store.holdings {
         match api.get_price_for_market(h.market, &h.symbol).await {
             Ok(price) => {
                 if h.name.is_empty() && !price.name.is_empty() {
                     h.name = price.name.clone();
-                    names_updated = true;
                 }
+                h.cached_price = Some(price.current_price);
+                h.cached_at = Some(kst_now());
+                holdings_updated = true;
                 let eval = price.current_price * h.quantity;
                 let cost = h.avg_price * h.quantity;
                 match h.market {
@@ -250,19 +257,51 @@ async fn cmd_list(user_id: i64, api: &ApiHandle) -> String {
             }
             Err(e) => {
                 tracing::warn!("Failed to get price for {}: {e}", h.symbol);
-                let line = formatter::format_holding_line_no_price(h);
-                match h.market {
-                    Market::KRX => domestic.push(line),
-                    Market::NAS | Market::NYS | Market::AMS => overseas.push(line),
-                    Market::BOND => bonds.push(line),
+                if let (Some(cp), Some(_)) = (h.cached_price, h.cached_at) {
+                    // 캐시 가격 사용
+                    let cached_price_data = PriceData {
+                        name: h.name.clone(),
+                        current_price: cp,
+                        change: 0.0,
+                        change_pct: 0.0,
+                        volume: 0,
+                    };
+                    let eval = cp * h.quantity;
+                    let cost = h.avg_price * h.quantity;
+                    match h.market {
+                        Market::NAS | Market::NYS | Market::AMS => {
+                            total_eval += eval * usd_krw;
+                            total_cost += cost * usd_krw;
+                        }
+                        _ => {
+                            total_eval += eval;
+                            total_cost += cost;
+                        }
+                    }
+                    has_price = true;
+                    has_cached = true;
+                    let line = formatter::format_holding_line_cached(h, &cached_price_data, usd_krw);
+                    match h.market {
+                        Market::KRX => domestic.push(line),
+                        Market::NAS | Market::NYS | Market::AMS => overseas.push(line),
+                        Market::BOND => bonds.push(line),
+                    }
+                } else {
+                    failed_symbols.push(h.symbol.clone());
+                    let line = formatter::format_holding_line_no_price(h);
+                    match h.market {
+                        Market::KRX => domestic.push(line),
+                        Market::NAS | Market::NYS | Market::AMS => overseas.push(line),
+                        Market::BOND => bonds.push(line),
+                    }
                 }
             }
         }
     }
 
-    if names_updated {
+    if holdings_updated {
         if let Err(e) = storage::save_portfolio(user_id, &store) {
-            tracing::warn!("Failed to save portfolio names: {e}");
+            tracing::warn!("Failed to save portfolio: {e}");
         }
     }
 
@@ -283,11 +322,22 @@ async fn cmd_list(user_id: i64, api: &ApiHandle) -> String {
         let pnl = total_eval - total_cost;
         let pnl_pct = if total_cost > 0.0 { pnl / total_cost * 100.0 } else { 0.0 };
         let sign = if pnl >= 0.0 { "+" } else { "" };
+        let partial = if !failed_symbols.is_empty() { " (일부 제외)" } else { "" };
         msg.push_str(&format!(
-            "\n\n──────────\n💰 총 평가: {}원\n💵 총 손익: {sign}{}원 ({sign}{:.1}%)",
+            "\n\n──────────\n💰 총 평가{partial}: {}원\n💵 총 손익: {sign}{}원 ({sign}{:.1}%)",
             formatter::fmt_quantity(total_eval),
             formatter::fmt_quantity(pnl),
             pnl_pct,
+        ));
+    }
+
+    if has_cached {
+        msg.push_str("\n* 직전 캐시 가격");
+    }
+    if !failed_symbols.is_empty() {
+        msg.push_str(&format!(
+            "\n⚠️ 시세 없음 (미포함): {}",
+            failed_symbols.join(", ")
         ));
     }
 
@@ -317,16 +367,18 @@ async fn cmd_info(user_id: i64, args: &str, api: &ApiHandle) -> String {
         Ok(price) => formatter::format_info(holding, &price, &signals),
         Err(e) => {
             tracing::warn!("Failed to get price for {symbol}: {e}");
-            let display_name = if holding.name.is_empty() {
-                "-".to_string()
+            let display_name = if holding.name.is_empty() { "-" } else { &holding.name };
+            let price_str = if let (Some(cp), Some(cat)) = (holding.cached_price, holding.cached_at) {
+                format!("{}* (캐시 {})", formatter::fmt_price(&holding.market, cp), cat.format("%H:%M"))
             } else {
-                holding.name.clone()
+                "- (조회 불가)".to_string()
             };
             let mut msg = format!(
-                "📈 {} {}\n매입가: {} × {}\n현재가: - (조회 불가)",
+                "📈 {} {}\n매입가: {} × {}\n현재가: {}",
                 holding.symbol, display_name,
                 formatter::fmt_price(&holding.market, holding.avg_price),
                 formatter::fmt_quantity(holding.quantity),
+                price_str,
             );
             if !signals.is_empty() {
                 msg.push_str("\n\n⚡ 설정된 시그널:");
@@ -351,13 +403,24 @@ async fn cmd_summary(user_id: i64, api: &ApiHandle) -> String {
     let mut overseas_val = 0.0f64;
     let mut bond_val = 0.0f64;
     let mut total_cost = 0.0f64;
+    let mut has_cached = false;
+    let mut failed_symbols: Vec<String> = Vec::new();
 
     for h in &store.holdings {
-        let price = match api.get_price_for_market(h.market, &h.symbol).await {
-            Ok(p) => p,
-            Err(_) => continue,
+        let current_price = match api.get_price_for_market(h.market, &h.symbol).await {
+            Ok(p) => p.current_price,
+            Err(e) => {
+                tracing::warn!("Summary: failed to get price for {}: {e}", h.symbol);
+                if let Some(cp) = h.cached_price {
+                    has_cached = true;
+                    cp
+                } else {
+                    failed_symbols.push(h.symbol.clone());
+                    continue;
+                }
+            }
         };
-        let eval = price.current_price * h.quantity;
+        let eval = current_price * h.quantity;
         let cost = h.avg_price * h.quantity;
 
         match h.market {
@@ -377,6 +440,13 @@ async fn cmd_summary(user_id: i64, api: &ApiHandle) -> String {
     }
 
     let total = domestic_val + overseas_val + bond_val;
+    if total == 0.0 && !failed_symbols.is_empty() {
+        return format!(
+            "⚠️ 시세 조회에 실패했습니다.\n실패 종목: {}",
+            failed_symbols.join(", ")
+        );
+    }
+
     let pnl = total - total_cost;
     let pnl_pct = if total_cost > 0.0 {
         pnl / total_cost * 100.0
@@ -393,9 +463,10 @@ async fn cmd_summary(user_id: i64, api: &ApiHandle) -> String {
     };
 
     let sign = if pnl >= 0.0 { "+" } else { "" };
+    let partial = if failed_symbols.is_empty() { "" } else { " (일부 제외)" };
 
-    format!(
-        "📊 포트폴리오 요약\n\
+    let mut msg = format!(
+        "📊 포트폴리오 요약{partial}\n\
          🇰🇷 국내: {}원 ({})\n\
          🇺🇸 미국: {}원 ({})\n\
          🏛 채권: {}원 ({})\n\
@@ -408,7 +479,19 @@ async fn cmd_summary(user_id: i64, api: &ApiHandle) -> String {
         formatter::fmt_int(total),
         formatter::fmt_int(pnl),
         pnl_pct,
-    )
+    );
+
+    if has_cached {
+        msg.push_str("\n* 직전 캐시 가격");
+    }
+    if !failed_symbols.is_empty() {
+        msg.push_str(&format!(
+            "\n⚠️ 시세 없음 (제외됨): {}",
+            failed_symbols.join(", ")
+        ));
+    }
+
+    msg
 }
 
 // --- 시그널 ---
