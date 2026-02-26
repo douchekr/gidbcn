@@ -71,7 +71,7 @@ mod tests {
     fn condition_display_description() {
         assert_eq!(
             Condition::PriceAbove { target: 80000.0 }.display_description(),
-            "가격 ≥ 80000"
+            "가격 ≥ 80,000"
         );
         assert_eq!(
             Condition::ProfitBelow { percentage: -10.0 }.display_description(),

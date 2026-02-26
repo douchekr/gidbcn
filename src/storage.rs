@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::{Context, Result};
 
 use crate::models::portfolio::PortfolioStore;
@@ -5,36 +7,24 @@ use crate::models::signal::SignalStore;
 
 pub const DATA_DIR: &str = "/opt/kkuepark/gidbcn";
 pub const CONFIG_PATH: &str = "/opt/kkuepark/gidbcn/config.json";
+pub const PORTFOLIO_PATH: &str = "/opt/kkuepark/gidbcn/portfolio.json";
+pub const SIGNALS_PATH: &str = "/opt/kkuepark/gidbcn/signals.json";
 
-fn portfolio_path(user_id: i64) -> String {
-    format!("{DATA_DIR}/portfolio_{user_id}.json")
-}
+type PortfolioDb = HashMap<String, PortfolioStore>;
+type SignalDb = HashMap<String, SignalStore>;
 
-fn signals_path(user_id: i64) -> String {
-    format!("{DATA_DIR}/signals_{user_id}.json")
-}
-
-fn load_or_default<T: serde::de::DeserializeOwned + Default + serde::Serialize>(
-    path: &str,
-) -> T {
+fn load_db<T: serde::de::DeserializeOwned + Default + serde::Serialize>(path: &str) -> HashMap<String, T> {
     match std::fs::read_to_string(path) {
         Ok(data) => serde_json::from_str(&data).unwrap_or_else(|e| {
-            tracing::warn!("Failed to parse {path}: {e}, using default");
-            T::default()
+            tracing::warn!("Failed to parse {path}: {e}, using empty db");
+            HashMap::new()
         }),
-        Err(_) => {
-            tracing::info!("{path} not found, creating default");
-            let val = T::default();
-            if let Ok(json) = serde_json::to_string_pretty(&val) {
-                let _ = std::fs::write(path, json);
-            }
-            val
-        }
+        Err(_) => HashMap::new(),
     }
 }
 
-fn save<T: serde::Serialize>(path: &str, data: &T) -> Result<()> {
-    let json = serde_json::to_string_pretty(data)?;
+fn save_db<T: serde::Serialize>(path: &str, db: &HashMap<String, T>) -> Result<()> {
+    let json = serde_json::to_string_pretty(db)?;
     std::fs::write(path, json).with_context(|| format!("Failed to write {path}"))?;
     Ok(())
 }
@@ -42,43 +32,33 @@ fn save<T: serde::Serialize>(path: &str, data: &T) -> Result<()> {
 // --- Portfolio ---
 
 pub fn load_portfolio(user_id: i64) -> PortfolioStore {
-    load_or_default(&portfolio_path(user_id))
+    let db: PortfolioDb = load_db(PORTFOLIO_PATH);
+    db.get(&user_id.to_string()).cloned().unwrap_or_default()
 }
 
 pub fn save_portfolio(user_id: i64, store: &PortfolioStore) -> Result<()> {
-    save(&portfolio_path(user_id), store)
+    let mut db: PortfolioDb = load_db(PORTFOLIO_PATH);
+    db.insert(user_id.to_string(), store.clone());
+    save_db(PORTFOLIO_PATH, &db)
 }
 
 // --- Signals ---
 
 pub fn load_signals(user_id: i64) -> SignalStore {
-    load_or_default(&signals_path(user_id))
+    let db: SignalDb = load_db(SIGNALS_PATH);
+    db.get(&user_id.to_string()).cloned().unwrap_or_default()
 }
 
 pub fn save_signals(user_id: i64, store: &SignalStore) -> Result<()> {
-    save(&signals_path(user_id), store)
+    let mut db: SignalDb = load_db(SIGNALS_PATH);
+    db.insert(user_id.to_string(), store.clone());
+    save_db(SIGNALS_PATH, &db)
 }
 
 // --- 전체 사용자 목록 (스케줄러용) ---
-// portfolio_{user_id}.json 파일들을 스캔해서 user_id 목록 반환
+// portfolio.json의 키 목록에서 user_id 반환
 
 pub fn list_user_ids() -> Vec<i64> {
-    let entries = match std::fs::read_dir(DATA_DIR) {
-        Ok(e) => e,
-        Err(_) => return Vec::new(),
-    };
-
-    let mut ids = Vec::new();
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if let Some(rest) = name.strip_prefix("portfolio_") {
-            if let Some(id_str) = rest.strip_suffix(".json") {
-                if let Ok(id) = id_str.parse::<i64>() {
-                    ids.push(id);
-                }
-            }
-        }
-    }
-    ids
+    let db: PortfolioDb = load_db(PORTFOLIO_PATH);
+    db.keys().filter_map(|k| k.parse::<i64>().ok()).collect()
 }

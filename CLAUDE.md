@@ -31,7 +31,7 @@
 │  │  • 명령어 처리          │         └─────────────┘ │
 │  │  • 시그널 엔진          │                         │
 │  │  • 스케줄러 (interval)  │  직접 호출 (sync)       │
-│  │  • JSON I/O 직접 처리   │◄──────► data/*.json     │
+│  │  • JSON I/O 직접 처리   │◄──────► /opt/.../portfolio.json │
 │  └───────────────────────┘                          │
 └─────────────────────────────────────────────────────┘
 ```
@@ -80,12 +80,14 @@ impl ApiHandle {
 gidbcn/
 ├── Cargo.toml
 ├── CLAUDE.md              ← 이 파일
+├── Makefile               ← 크로스컴파일 + 배포 (make build-pi, make deploy)
 ├── .gitignore
-├── data/
-│   ├── config.json        ← gitignore (API 키, 토큰)
-│   ├── portfolio.json
-│   ├── signals.json
-│   └── alert_log.json
+├── .cargo/
+│   └── config.toml        ← armv7 링커 설정, release strip
+├── docs/
+│   ├── architecture.md
+│   ├── build.md           ← 크로스컴파일 가이드
+│   └── config.template.json
 └── src/
     ├── main.rs            ← 채널 생성 → API Actor spawn → Bot 실행
     ├── config.rs          ← Config 구조체, JSON 로드/저장
@@ -100,7 +102,7 @@ gidbcn/
     ├── bot/
     │   ├── mod.rs
     │   ├── handler.rs     ← teloxide 디스패처 설정
-    │   ├── commands.rs    ← /add, /remove, /list 등
+    │   ├── commands.rs    ← /port, /signal 서브커맨드
     │   └── formatter.rs   ← 텔레그램 메시지 포맷
     ├── signal/
     │   ├── mod.rs
@@ -116,6 +118,11 @@ gidbcn/
         └── messages.rs    ← ApiRequest enum
 ```
 
+**데이터 파일 경로** (레포 외부): `/opt/kkuepark/gidbcn/`
+- `config.json` — API 키, 토큰 (gitignore)
+- `portfolio.json` — 전체 사용자 포트폴리오 (user_id 키 통합)
+- `signals.json` — 전체 사용자 시그널 (user_id 키 통합)
+
 ---
 
 ## main.rs 초기화 흐름
@@ -123,18 +130,19 @@ gidbcn/
 ```rust
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    tracing_subscriber::init();
+    tracing_subscriber::fmt::init();
 
-    // 1. config 로드
-    let config = Config::load("data/config.json");
+    // 1. config 로드 (없으면 템플릿 생성 후 종료)
+    let config = Config::load(storage::CONFIG_PATH)?;
 
     // 2. API Actor 채널 생성 + spawn
     let (api_tx, api_rx) = mpsc::channel::<ApiRequest>(32);
-    let api_handle = ApiHandle { sender: api_tx };
-    tokio::spawn(run_api_actor(api_rx, config.kis_api.clone()));
+    let api_handle = ApiHandle::new(api_tx);
+    tokio::spawn(run_api_actor(api_rx, config.clone()));
 
-    // 3. 스케줄러 spawn
-    tokio::spawn(run_scheduler(api_handle.clone(), config.scheduler.clone()));
+    // 3. 스케줄러 spawn (bot 인스턴스 공유)
+    let tg_bot = Bot::new(&config.telegram.bot_token);
+    tokio::spawn(run_scheduler(api_handle.clone(), config.scheduler.clone(), tg_bot.clone()));
 
     // 4. 텔레그램 봇 실행 (메인 태스크, block)
     run_bot(config.telegram, api_handle).await;
@@ -224,39 +232,49 @@ tr_id: {거래ID}
 ### portfolio.json
 ```json
 {
-  "holdings": [
-    {
-      "market": "KRX",
-      "symbol": "005930",
-      "name": "삼성전자",
-      "quantity": 10,
-      "avg_price": 70000.0,
-      "added_at": "2026-02-26T10:00:00+09:00"
-    }
-  ]
+  "42621862": {
+    "holdings": [
+      {
+        "market": "KRX",
+        "symbol": "005930",
+        "name": "삼성전자",
+        "quantity": 10,
+        "avg_price": 70000.0,
+        "added_at": "2026-02-26T10:00:00+09:00",
+        "cached_price": 72500.0,
+        "cached_at": "2026-02-26T14:30:00+09:00"
+      }
+    ]
+  }
 }
 ```
+- 최상위 키: Telegram user_id (문자열)
 - market: `KRX` | `NAS` | `NYS` | `AMS` | `BOND`
-- `name`: /list 첫 조회 시 API에서 자동 캐싱. /add 시 선택적으로 직접 입력 가능.
+- `name`: 시세 조회 시 API에서 자동 캐싱. `/port add` 시 직접 입력 가능.
+- `cached_price` / `cached_at`: 마지막 성공 조회 가격. 조회 실패 시 폴백용. `⏱` 마커로 표시.
 
 ### signals.json
 ```json
 {
-  "next_id": 3,
-  "signals": [
-    {
-      "id": "s_001",
-      "symbol": "005930",
-      "condition": {
-        "type": "price_above",
-        "params": { "target": 80000.0 }
-      },
-      "active": true,
-      "created_at": "2026-02-26T10:30:00+09:00"
-    }
-  ]
+  "42621862": {
+    "signals": [
+      {
+        "id": "fc8f512e-ca6b-4a86-8ed4-e442863919db",
+        "symbol": "005930",
+        "condition": {
+          "type": "price_above",
+          "params": { "target": 80000.0 }
+        },
+        "active": true,
+        "created_at": "2026-02-26T10:30:00+09:00"
+      }
+    ]
+  }
 }
 ```
+- 최상위 키: Telegram user_id (문자열)
+- `id`: UUID v4 (내부 식별용, 사용자에게 노출 안 됨)
+- 사용자에게는 `/signal list`의 순서 번호로 표시 및 삭제
 
 **condition types:**
 | type | params | 설명 |
@@ -266,53 +284,37 @@ tr_id: {거래ID}
 | `profit_above` | `{ percentage: f64 }` | 수익률 ≥ % (매입가 대비) |
 | `profit_below` | `{ percentage: f64 }` | 수익률 ≤ % |
 
-**시그널 동작**: 1회성 발동 → 자동 비활성화 (active: false). 재설정 필요.
-
-### alert_log.json
-```json
-{
-  "next_id": 2,
-  "alerts": [
-    {
-      "id": "a_001",
-      "signal_id": "s_001",
-      "symbol": "005930",
-      "condition_type": "price_above",
-      "trigger_value": 80500.0,
-      "message": "🚨 시그널 발동! ...",
-      "sent_at": "2026-02-26T13:45:00+09:00",
-      "success": true
-    }
-  ]
-}
-```
+**시그널 동작**: 1회성 발동 → 텔레그램 전송 성공 시에만 `active: false`. 전송 실패 시 `active` 유지 → 다음 주기 재시도.
 
 ---
 
 ## 텔레그램 봇 명령어
 
-### 포트폴리오 관리
+### 포트폴리오 관리 (`/port`)
 | 명령어 | 설명 |
 |---|---|
-| `/add [마켓] [종목코드] [수량] [매입가] [종목명]` | 종목 추가 (종목명 생략 시 API에서 자동 조회) |
-| `/remove [종목코드]` | 종목 삭제 |
-| `/edit [종목코드] [수량] [매입가]` | 종목 수정 |
-| `/list` | 전체 포트폴리오 + 현재가 + 손익 |
-| `/info [종목코드]` | 개별 종목 상세 + 시그널 |
-| `/summary` | 자산배분 요약 + 총 손익 |
+| `/port add [마켓] [종목코드] [수량] [매입가] [종목명]` | 종목 추가 (종목명 생략 시 API에서 자동 조회) |
+| `/port remove [종목코드]` | 종목 삭제 |
+| `/port edit [종목코드] [수량] [매입가]` | 종목 수정 |
+| `/port list` | 전체 포트폴리오 + 현재가 + 손익 |
+| `/port info [종목코드]` | 개별 종목 상세 + 시그널 |
+| `/port summary` | 자산배분 요약 + 총 손익 |
 
-### 시그널 관리
+### 시그널 관리 (`/signal`)
 | 명령어 | 설명 |
 |---|---|
-| `/signal [종목코드] [조건타입] [파라미터...]` | 시그널 설정 |
-| `/signal_list` | 전체 시그널 조회 |
-| `/signal_remove [시그널ID]` | 시그널 삭제 |
-| `/signal_clear [종목코드]` | 종목 시그널 전체 삭제 |
+| `/signal add [종목코드] [> 또는 <] [값 또는 수익률%]` | 시그널 설정 (예: `> 80000`, `> 10%`) |
+| `/signal list` | 전체 시그널 조회 (번호 포함) |
+| `/signal remove [번호]` | 번호로 삭제. 여러 개: `/signal remove 1 2` |
+| `/signal clear [종목코드]` | 종목 시그널 전체 삭제 |
+
+> ⚠️ `/signal remove` 시 목록 확인 후, 여러 개는 한 번에 입력 (번호가 삭제 후 재정렬됨)
 
 ### 시스템
 | 명령어 | 설명 |
 |---|---|
 | `/status` | 시스템 상태 |
+| `/ping` | 응답 확인 |
 | `/help` | 도움말 |
 
 ### 마켓 코드 매핑
@@ -352,9 +354,11 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
-teloxide = { version = "0.13", features = ["macros"] }
+teloxide = { version = "0.13", default-features = false, features = ["macros", "rustls", "ctrlc_handler"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
+anyhow = "1"
+uuid = { version = "1", features = ["v4"] }
 ```
 
 ---
