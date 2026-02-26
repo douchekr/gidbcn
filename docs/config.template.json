@@ -1,0 +1,19 @@
+{
+  "kis_api": {
+    "app_key": "YOUR_APP_KEY",
+    "app_secret": "YOUR_APP_SECRET",
+    "base_url": "https://openapi.koreainvestment.com:9443",
+    "hts_id": "YOUR_HTS_ID",
+    "token": null
+  },
+  "telegram": {
+    "bot_token": "YOUR_BOT_TOKEN"
+  },
+  "exchange_rate": {
+    "usd_krw": 1350.0,
+    "updated_at": null
+  },
+  "scheduler": {
+    "signal_check_interval_minutes": 5
+  }
+}
