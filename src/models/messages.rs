@@ -11,7 +11,9 @@ pub struct PriceData {
 
 #[derive(Debug)]
 pub struct BondData {
+    pub name: String,
     pub current_price: f64,
+    pub change_pct: f64,
 }
 
 pub enum ApiRequest {
@@ -30,5 +32,10 @@ pub enum ApiRequest {
     },
     GetExchangeRate {
         respond_to: oneshot::Sender<Result<f64>>,
+    },
+    GetStockName {
+        prdt_type_cd: String,
+        pdno: String,
+        respond_to: oneshot::Sender<Result<String>>,
     },
 }

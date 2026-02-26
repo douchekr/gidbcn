@@ -6,7 +6,7 @@ use crate::config::{Config, KisApiConfig};
 use crate::models::messages::ApiRequest;
 use crate::models::portfolio::Market;
 
-use super::{auth, bond, domestic, exchange, overseas};
+use super::{auth, bond, domestic, exchange, overseas, stock_info};
 
 use crate::storage;
 
@@ -123,6 +123,11 @@ pub async fn run_api_actor(mut rx: mpsc::Receiver<ApiRequest>, full_config: Conf
                 let result = exchange::get_usd_krw(&ctx).await;
                 let _ = respond_to.send(result);
             }
+            ApiRequest::GetStockName { prdt_type_cd, pdno, respond_to } => {
+                ctx.rate_limit().await;
+                let result = stock_info::get_stock_name(&ctx, &prdt_type_cd, &pdno).await;
+                let _ = respond_to.send(result);
+            }
         }
     }
 
@@ -187,6 +192,19 @@ impl ApiHandle {
         rx.await?
     }
 
+    /// Market에 따라 상품기본조회(CTPF1604R)로 종목명(prdt_abrv_name) 조회
+    pub async fn get_stock_name(&self, market: Market, symbol: &str) -> Result<String> {
+        let (tx, rx) = oneshot::channel();
+        self.sender
+            .send(ApiRequest::GetStockName {
+                prdt_type_cd: market.product_type_code().to_string(),
+                pdno: symbol.to_string(),
+                respond_to: tx,
+            })
+            .await?;
+        rx.await?
+    }
+
     /// Market에 따라 적절한 현재가 API 호출
     pub async fn get_price_for_market(
         &self,
@@ -201,9 +219,9 @@ impl ApiHandle {
             Market::BOND => {
                 let bond = self.get_bond_price(symbol).await?;
                 Ok(crate::models::messages::PriceData {
-                    name: String::new(),
+                    name: bond.name,
                     current_price: bond.current_price,
-                    change_pct: 0.0,
+                    change_pct: bond.change_pct,
                 })
             }
         }

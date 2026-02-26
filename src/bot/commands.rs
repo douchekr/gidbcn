@@ -88,7 +88,7 @@ async fn cmd_port(user_id: i64, args: &str, api: &ApiHandle) -> String {
     let parts: Vec<&str> = args.split_whitespace().collect();
     let rest = parts.get(1..).unwrap_or(&[]).join(" ");
     match parts.first().copied() {
-        Some("add")     => cmd_add(user_id, &rest),
+        Some("add")     => cmd_add(user_id, &rest, api).await,
         Some("remove")  => cmd_remove(user_id, &rest),
         Some("edit")    => cmd_edit(user_id, &rest),
         Some("list")    => cmd_list(user_id, api).await,
@@ -105,7 +105,7 @@ async fn cmd_port(user_id: i64, args: &str, api: &ApiHandle) -> String {
     }
 }
 
-fn cmd_add(user_id: i64, args: &str) -> String {
+async fn cmd_add(user_id: i64, args: &str, api: &ApiHandle) -> String {
     let parts: Vec<&str> = args.split_whitespace().collect();
     if parts.len() < 4 {
         return "사용법: /add [마켓] [종목코드] [수량] [매입가] [종목명]\n예: /add KRX 005930 10 70000 삼성전자".to_string();
@@ -124,10 +124,22 @@ fn cmd_add(user_id: i64, args: &str) -> String {
         Ok(v) => v,
         Err(_) => return "매입가는 숫자여야 합니다.".to_string(),
     };
+
+    // 종목명: 사용자 입력 우선, 없으면 API 자동 조회
     let name = if parts.len() > 4 {
         parts[4..].join(" ")
     } else {
-        String::new()
+        match api.get_stock_name(market, &symbol).await {
+            Ok(n) if !n.is_empty() => n,
+            Ok(_) => {
+                tracing::warn!("Empty stock name from API for {symbol}");
+                String::new()
+            }
+            Err(e) => {
+                tracing::warn!("Failed to fetch stock name for {symbol}: {e}");
+                String::new()
+            }
+        }
     };
 
     let mut store = storage::load_portfolio(user_id);
@@ -138,7 +150,7 @@ fn cmd_add(user_id: i64, args: &str) -> String {
     store.holdings.push(Holding {
         market,
         symbol: symbol.clone(),
-        name,
+        name: name.clone(),
         quantity,
         avg_price,
         added_at: kst_now(),
@@ -150,7 +162,8 @@ fn cmd_add(user_id: i64, args: &str) -> String {
         return format!("저장 실패: {e}");
     }
 
-    format!("✅ {symbol} ({market}) 추가 완료")
+    let name_part = if name.is_empty() { String::new() } else { format!(" {name}") };
+    format!("✅ {symbol}{name_part} ({market}) 추가 완료")
 }
 
 fn cmd_remove(user_id: i64, args: &str) -> String {

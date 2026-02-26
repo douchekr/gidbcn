@@ -1,4 +1,4 @@
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, FixedOffset, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -35,12 +35,36 @@ impl Market {
         }
     }
 
+    /// 현재 KST 기준으로 해당 마켓이 장중인지 확인
+    pub fn is_open_now(&self) -> bool {
+        let kst = FixedOffset::east_opt(9 * 3600).unwrap();
+        let now = Utc::now().with_timezone(&kst);
+        let hhmm = now.hour() * 100 + now.minute();
+        match self {
+            // KRX 채권: 09:00~15:30 KST
+            Market::KRX | Market::BOND => hhmm >= 900 && hhmm <= 1530,
+            // 미국 3개 거래소: 22:30~05:00 KST (자정 넘김)
+            Market::NAS | Market::NYS | Market::AMS => hhmm >= 2230 || hhmm <= 500,
+        }
+    }
+
     pub fn exchange_code(&self) -> &str {
         match self {
             Market::NAS => "NAS",
             Market::NYS => "NYS",
             Market::AMS => "AMS",
             _ => "",
+        }
+    }
+
+    /// 상품기본조회(CTPF1604R) PRDT_TYPE_CD
+    pub fn product_type_code(&self) -> &str {
+        match self {
+            Market::KRX  => "300",
+            Market::NAS  => "512",
+            Market::NYS  => "513",
+            Market::AMS  => "529",
+            Market::BOND => "302",
         }
     }
 }

@@ -95,7 +95,7 @@ gidbcn/
     │   ├── mod.rs
     │   ├── actor.rs       ← ApiActor 수신 루프 + ApiHandle
     │   ├── auth.rs        ← OAuth 토큰 발급/갱신
-    │   ├── domestic.rs    ← 국내주식 현재가 (inquire-daily-itemchartprice output1)
+    │   ├── domestic.rs    ← 국내주식 현재가 (inquire-price, 날짜 파라미터 없음)
     │   ├── overseas.rs    ← 해외주식 현재가
     │   ├── bond.rs        ← 국내채권 현재가
     │   └── exchange.rs    ← 환율 조회
@@ -175,12 +175,13 @@ tr_id: {거래ID}
 - Body: `{ "grant_type": "client_credentials", "appkey": "...", "appsecret": "..." }`
 - 응답: `access_token`, `expires_in` (86400초)
 
-#### 1. 국내주식 현재가 + 종목명
-- GET `/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice`
-- tr_id: `FHKST03010100`
-- Query: `FID_COND_MRKT_DIV_CODE=J`, `FID_INPUT_ISCD={종목코드6자리}`, `FID_INPUT_DATE_1=오늘`, `FID_INPUT_DATE_2=오늘`, `FID_PERIOD_DIV_CODE=D`, `FID_ORG_ADJ_PRC=0`
-- 응답 (`output1`): `hts_kor_isnm`(종목명), `stck_prpr`(현재가), `prdy_vrss`(전일대비), `prdy_ctrt`(등락률), `acml_vol`(거래량)
-- **주의**: `inquire-price` 엔드포인트는 `hts_kor_isnm` 미포함. 종목명은 반드시 이 엔드포인트 사용.
+#### 1. 국내주식 현재가
+- GET `/uapi/domestic-stock/v1/quotations/inquire-price`
+- tr_id: `FHKST01010100`
+- Query: `FID_COND_MRKT_DIV_CODE=J`, `FID_INPUT_ISCD={종목코드6자리}`
+- 응답 (`output`): `stck_prpr`(현재가), `prdy_ctrt`(등락률)
+- **주의**: 종목명(`hts_kor_isnm`) 미포함 → 종목명은 `Holding.name`에 캐시 또는 `/port add` 시 직접 입력
+- 날짜 파라미터 없음 → 장 외 시간에도 안정적으로 동작 (자정 이후 새벽 시간대 포함)
 
 #### 2. 해외주식 현재가
 - GET `/uapi/overseas-price/v1/quotations/price`

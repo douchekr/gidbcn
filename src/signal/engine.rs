@@ -35,6 +35,11 @@ pub async fn check_all_signals(api: &ApiHandle, bot: &Bot, user_id: i64) {
             None => continue,
         };
 
+        // 해당 마켓이 현재 장중이 아니면 건너뜀
+        if !market.is_open_now() {
+            continue;
+        }
+
         let price_data = match api.get_price_for_market(market, &symbol).await {
             Ok(p) => p,
             Err(e) => {
