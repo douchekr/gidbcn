@@ -57,6 +57,15 @@ impl Market {
         }
     }
 
+    /// 평가금액 보정계수
+    /// BOND: 수량(천원 단위) × 가격(1만원 기준) → 실제 금액 = price × qty / 10
+    pub fn value_factor(&self) -> f64 {
+        match self {
+            Market::BOND => 0.1,
+            _ => 1.0,
+        }
+    }
+
     /// 상품기본조회(CTPF1604R) PRDT_TYPE_CD
     pub fn product_type_code(&self) -> &str {
         match self {

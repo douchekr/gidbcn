@@ -47,7 +47,7 @@ enum ApiRequest {
     GetOverseasPrice { exchange: String, symbol: String, respond_to: oneshot::Sender<Result<PriceData>> },
     GetBondPrice { isin: String, respond_to: oneshot::Sender<Result<BondData>> },
     GetExchangeRate { respond_to: oneshot::Sender<Result<f64>> },
-    RefreshToken, // fire-and-forget
+    GetStockName { prdt_type_cd: String, pdno: String, respond_to: oneshot::Sender<Result<String>> },
 }
 ```
 
@@ -98,7 +98,8 @@ gidbcn/
     │   ├── domestic.rs    ← 국내주식 현재가 (inquire-price, 날짜 파라미터 없음)
     │   ├── overseas.rs    ← 해외주식 현재가
     │   ├── bond.rs        ← 국내채권 현재가
-    │   └── exchange.rs    ← 환율 조회
+    │   ├── exchange.rs    ← 환율 조회
+    │   └── stock_info.rs  ← 종목명 조회 (상품기본조회 CTPF1604R)
     ├── bot/
     │   ├── mod.rs
     │   ├── handler.rs     ← teloxide 디스패처 설정
@@ -191,12 +192,27 @@ tr_id: {거래ID}
 
 #### 3. 국내채권 현재가
 - GET `/uapi/domestic-bond/v1/quotations/inquire-price`
-- tr_id: `FHKBJ773000C0`
+- tr_id: `FHKBJ773400C0`
 - Query: `FID_COND_MRKT_DIV_CODE=B`, `FID_INPUT_ISCD={ISIN 12자리}`
+- 응답 (`output`): `hts_kor_isnm`(종목명), `bond_prpr`(현재가), `prdy_ctrt`(등락률)
+- **채권 가격 단위**: `bond_prpr`는 액면가 10,000원 기준 가격 (예: 7,485 = 74.85%)
+- **채권 수량 단위**: `quantity`는 액면가 1,000원 단위 수량 (예: 50,000 = 액면 5,000만원)
+- **평가금액 계산**: `price × quantity × 0.1` → `Market::value_factor()` = 0.1 적용
 
 #### 4. 환율 조회
 - GET `/uapi/overseas-stock/v1/quotations/inquire-exchange-rate`
-- 하루 2회 캐싱 (08:50, 15:40) → config.json의 exchange_rate에 저장
+- tr_id: `CTRP6504R`
+- 응답: `output[]` 배열에서 `cur_cd == "USD"` 항목의 `bkpr`(매매기준율) 사용
+- **캐싱**: 조회 성공 시 항상 config.json `exchange_rate`에 저장 (API Actor 내부)
+- 실패 시 → config.json 캐시값 사용. 캐시 없으면 → Err (호출측에서 1350.0 폴백)
+
+#### 5. 종목명 조회 (상품기본조회)
+- GET `/uapi/domestic-stock/v1/quotations/search-info`
+- tr_id: `CTPF1604R`
+- Query: `PRDT_TYPE_CD={코드}`, `PDNO={종목코드/ISIN}`
+- 응답 (`output`): `prdt_abrv_name`(표시용 약어명) 사용
+- `Market::product_type_code()`: KRX=300, NAS=512, NYS=513, AMS=529, BOND=302
+- 날짜 파라미터 없음. 전 마켓 단일 엔드포인트. `/port add` 시 종목명 미입력이면 자동 조회
 
 ---
 
@@ -216,16 +232,14 @@ tr_id: {거래ID}
     }
   },
   "telegram": {
-    "bot_token": "123456789:ABCdef...",
-    "chat_id": 123456789
+    "bot_token": "123456789:ABCdef..."
   },
   "exchange_rate": {
-    "usd_krw": 1350.50,
-    "updated_at": "2026-02-26T15:40:00+09:00"
+    "usd_krw": 1450.20,
+    "updated_at": "2026-02-27T15:40:00+09:00"
   },
   "scheduler": {
-    "signal_check_interval_minutes": 5,
-    "exchange_rate_cron": ["0 50 8 * * *", "0 40 15 * * *"]
+    "signal_check_interval_minutes": 5
   }
 }
 ```
@@ -253,6 +267,8 @@ tr_id: {거래ID}
 - market: `KRX` | `NAS` | `NYS` | `AMS` | `BOND`
 - `name`: 시세 조회 시 API에서 자동 캐싱. `/port add` 시 직접 입력 가능.
 - `cached_price` / `cached_at`: 마지막 성공 조회 가격. 조회 실패 시 폴백용. `⏱` 마커로 표시.
+- **BOND 전용**: `quantity` = 액면가 1,000원 단위, `avg_price`/`cached_price` = 10,000원 액면 기준 가격
+  - 평가금액 = `price × quantity × 0.1` (예: qty=50000, price=7485 → 37,425,000원)
 
 ### signals.json
 ```json
@@ -336,7 +352,8 @@ tr_id: {거래ID}
 | 작업 | 주기 | 조건 |
 |---|---|---|
 | 시그널 체크 (현재가) | 5분 | 장중에만 (KRX: 09:00~15:30, US: 22:30~05:00 KST) |
-| 환율 조회 | 1일 2회 | 08:50, 15:40 |
+| 환율 조회 (스케줄러) | 1일 2회 | 08:50, 15:40 KST |
+| 환율 조회 (on-demand) | `/port list`, `/port summary` 실행 시 | 항상. 성공 시 config.json 저장 |
 | 토큰 갱신 | 만료 1시간 전 | `expires_at` 기준 자동 판단 (API Actor가 매 요청 전 체크) |
 
 ---
@@ -364,6 +381,18 @@ uuid = { version = "1", features = ["v4"] }
 
 ---
 
+## Market 헬퍼 메서드 (src/models/portfolio.rs)
+
+| 메서드 | 역할 |
+|---|---|
+| `Market::from_str(s)` | 문자열 → Market (대소문자 무관) |
+| `Market::is_open_now()` | KST 현재 시각 기준 장중 여부 |
+| `Market::exchange_code()` | 해외주식 EXCD 코드 (NAS/NYS/AMS만 반환) |
+| `Market::value_factor()` | 평가금액 보정계수. BOND=0.1, 나머지=1.0 |
+| `Market::product_type_code()` | 상품기본조회 PRDT_TYPE_CD. KRX=300, NAS=512, NYS=513, AMS=529, BOND=302 |
+
+---
+
 ## 코딩 규칙
 
 1. **Mutex/RwLock/Arc<Mutex<T>> 절대 사용 금지**. Actor 패턴 + 채널로만 통신.
@@ -376,10 +405,6 @@ uuid = { version = "1", features = ["v4"] }
 8. **rate limiting**: API Actor 내부에서 `tokio::time::sleep`으로 초당 20회 제한 준수.
 
 ---
-
-## 검증 필요 사항 (PoC)
-
-- **teloxide + `current_thread` 호환성**: GitHub 이슈 #366. 구현 초기에 최소 PoC (봇 시작 + 명령어 1개 응답) 검증. 문제 시 대안: `reqwest`로 Telegram Bot API 직접 호출 + long polling 자체 구현.
 
 ---
 
@@ -399,27 +424,29 @@ uuid = { version = "1", features = ["v4"] }
 
 ## 조회 명령어 출력 예시
 
-### /list
+### /port list
 ```
 📊 포트폴리오 현황
 2026-02-26 14:30 기준
 
 🇰🇷 국내
-• 005930 삼성전자 | 10주 | 70,000→72,500 | +3.6%
-• 069500 KODEX200 | 100주 | 35,000→34,200 | -2.3%
+• 005930 삼성전자 | 10 | 70,000→72,500 | +3.6%
+• 069500 KODEX200 | 100 | 35,000→34,200 | -2.3%
 
 🇺🇸 미국
-• TSLA 테슬라 | 5주 | $180.50→$195.20 | +8.1%
+• TSLA 테슬라 | 5 | $180.50→$195.20 | +8.1%
 
 🏛 채권
-• KR103502G9C8 | 10 | 9,850→9,920 | +0.7%
+• KR103502G990 국고01125-3909(19-6) | 50,000 | 7,435→7,485 | +0.7%
 
 ──────────
-💰 총 평가: 45,234,500원
-💵 총 손익: +1,234,500원 (+2.8%)
+💰 총 평가: 145,234,500원
+💵 총 손익: +1,234,500원 (+0.9%)
 ```
+- 총 평가 = KRX원화 + 채권원화 + (미국달러 × usd_krw)
+- `⏱` 마커: 직전 캐시 가격 사용 (실시간 조회 실패 시)
 
-### /info [종목코드]
+### /port info [종목코드]
 ```
 📈 005930 삼성전자
 현재가: 72,500원 (전일 대비 +1.2%)
@@ -432,13 +459,13 @@ uuid = { version = "1", features = ["v4"] }
 • 수익률 ≥ 20% → 알림
 ```
 
-### /summary
+### /port summary
 ```
 📊 포트폴리오 요약
-🇰🇷 국내: 4,145,000원 (38%)
-🇺🇸 미국: 5,832,000원 (54%)
-🏛 채권: 992,000원 (8%)
+🇰🇷 국내: 69,521,000원 (65%)
+🇺🇸 미국: 26,467,000원 (25%)
+🏛 채권: 37,425,000원 (35%)
 ──────────
-💰 총 평가: 10,969,000원
-💵 총 손익: +569,000원 (+5.5%)
+💰 총 평가: 133,413,000원
+💵 총 손익: +3,234,500원 (+2.5%)
 ```

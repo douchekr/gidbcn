@@ -120,7 +120,30 @@ pub async fn run_api_actor(mut rx: mpsc::Receiver<ApiRequest>, full_config: Conf
             }
             ApiRequest::GetExchangeRate { respond_to } => {
                 ctx.rate_limit().await;
-                let result = exchange::get_usd_krw(&ctx).await;
+                let result = match exchange::get_usd_krw(&ctx).await {
+                    Ok(rate) => {
+                        // 성공 시 config.json에 캐싱
+                        let kst = chrono::FixedOffset::east_opt(9 * 3600).unwrap();
+                        full_config.exchange_rate.usd_krw = rate;
+                        full_config.exchange_rate.updated_at =
+                            Some(chrono::Utc::now().with_timezone(&kst));
+                        if let Err(e) = full_config.save(storage::CONFIG_PATH) {
+                            tracing::warn!("Failed to save exchange rate to config: {e}");
+                        }
+                        tracing::info!("USD/KRW = {rate} (saved to config)");
+                        Ok(rate)
+                    }
+                    Err(e) => {
+                        // 실패 시 캐시된 환율 사용
+                        if full_config.exchange_rate.updated_at.is_some() {
+                            let cached = full_config.exchange_rate.usd_krw;
+                            tracing::warn!("Exchange rate API failed, using cached {cached}: {e}");
+                            Ok(cached)
+                        } else {
+                            Err(e)
+                        }
+                    }
+                };
                 let _ = respond_to.send(result);
             }
             ApiRequest::GetStockName { prdt_type_cd, pdno, respond_to } => {

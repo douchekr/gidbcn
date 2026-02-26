@@ -78,7 +78,10 @@ fn help_text() -> String {
      /status — 시스템 상태\n\
      /ping — 핑\n\n\
      마켓: KRX, NAS, NYS, AMS, BOND\n\
-     조건: > [가격], < [가격], > [수익률%], < [수익률%]"
+     조건: > [가격], < [가격], > [수익률%], < [수익률%]\n\n\
+     ※ BOND 수량/매입가 단위:\n\
+       수량 = 액면가 1,000원 단위 (예: 50000 → 액면 5,000만원)\n\
+       매입가 = 10,000원 액면 기준 가격 (예: 7435)"
         .to_string()
 }
 
@@ -108,7 +111,7 @@ async fn cmd_port(user_id: i64, args: &str, api: &ApiHandle) -> String {
 async fn cmd_add(user_id: i64, args: &str, api: &ApiHandle) -> String {
     let parts: Vec<&str> = args.split_whitespace().collect();
     if parts.len() < 4 {
-        return "사용법: /add [마켓] [종목코드] [수량] [매입가] [종목명]\n예: /add KRX 005930 10 70000 삼성전자".to_string();
+        return "사용법: /port add [마켓] [종목코드] [수량] [매입가] [종목명]\n예: /port add KRX 005930 10 70000 삼성전자".to_string();
     }
 
     let market = match Market::from_str(parts[0]) {
@@ -144,7 +147,7 @@ async fn cmd_add(user_id: i64, args: &str, api: &ApiHandle) -> String {
 
     let mut store = storage::load_portfolio(user_id);
     if store.holdings.iter().any(|h| h.symbol == symbol) {
-        return format!("{symbol} 은(는) 이미 등록된 종목입니다. /edit 으로 수정하세요.");
+        return format!("{symbol} 은(는) 이미 등록된 종목입니다. /port edit 으로 수정하세요.");
     }
 
     store.holdings.push(Holding {
@@ -169,7 +172,7 @@ async fn cmd_add(user_id: i64, args: &str, api: &ApiHandle) -> String {
 fn cmd_remove(user_id: i64, args: &str) -> String {
     let symbol = args.trim();
     if symbol.is_empty() {
-        return "사용법: /remove [종목코드]".to_string();
+        return "사용법: /port remove [종목코드]".to_string();
     }
 
     let mut store = storage::load_portfolio(user_id);
@@ -190,7 +193,7 @@ fn cmd_remove(user_id: i64, args: &str) -> String {
 fn cmd_edit(user_id: i64, args: &str) -> String {
     let parts: Vec<&str> = args.split_whitespace().collect();
     if parts.len() < 3 {
-        return "사용법: /edit [종목코드] [수량] [매입가]".to_string();
+        return "사용법: /port edit [종목코드] [수량] [매입가]".to_string();
     }
 
     let symbol = parts[0];
@@ -222,7 +225,7 @@ fn cmd_edit(user_id: i64, args: &str) -> String {
 async fn cmd_list(user_id: i64, api: &ApiHandle) -> String {
     let mut store = storage::load_portfolio(user_id);
     if store.holdings.is_empty() {
-        return "포트폴리오가 비어있습니다. /add 로 종목을 추가하세요.".to_string();
+        return "포트폴리오가 비어있습니다. /port add 로 종목을 추가하세요.".to_string();
     }
 
     let now = kst_now().format("%Y-%m-%d %H:%M").to_string();
@@ -249,8 +252,9 @@ async fn cmd_list(user_id: i64, api: &ApiHandle) -> String {
                 h.cached_price = Some(price.current_price);
                 h.cached_at = Some(kst_now());
                 holdings_updated = true;
-                let eval = price.current_price * h.quantity;
-                let cost = h.avg_price * h.quantity;
+                let factor = h.market.value_factor();
+                let eval = price.current_price * h.quantity * factor;
+                let cost = h.avg_price * h.quantity * factor;
                 match h.market {
                     Market::NAS | Market::NYS | Market::AMS => {
                         total_eval += eval * usd_krw;
@@ -278,8 +282,9 @@ async fn cmd_list(user_id: i64, api: &ApiHandle) -> String {
                         current_price: cp,
                         change_pct: 0.0,
                     };
-                    let eval = cp * h.quantity;
-                    let cost = h.avg_price * h.quantity;
+                    let factor = h.market.value_factor();
+                    let eval = cp * h.quantity * factor;
+                    let cost = h.avg_price * h.quantity * factor;
                     match h.market {
                         Market::NAS | Market::NYS | Market::AMS => {
                             total_eval += eval * usd_krw;
@@ -359,7 +364,7 @@ async fn cmd_list(user_id: i64, api: &ApiHandle) -> String {
 async fn cmd_info(user_id: i64, args: &str, api: &ApiHandle) -> String {
     let symbol = args.trim();
     if symbol.is_empty() {
-        return "사용법: /info [종목코드]".to_string();
+        return "사용법: /port info [종목코드]".to_string();
     }
 
     let mut store = storage::load_portfolio(user_id);
@@ -452,8 +457,9 @@ async fn cmd_summary(user_id: i64, api: &ApiHandle) -> String {
                 }
             }
         };
-        let eval = current_price * h.quantity;
-        let cost = h.avg_price * h.quantity;
+        let factor = h.market.value_factor();
+        let eval = current_price * h.quantity * factor;
+        let cost = h.avg_price * h.quantity * factor;
 
         match h.market {
             Market::KRX => {

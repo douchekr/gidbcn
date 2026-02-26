@@ -123,13 +123,14 @@ pub fn format_holding_line_cached(h: &Holding, price: &PriceData, usd_krw: f64) 
 }
 
 pub fn format_info(h: &Holding, price: &PriceData, signals: &[&Signal]) -> String {
-    let pnl = (price.current_price - h.avg_price) * h.quantity;
+    let factor = h.market.value_factor();
+    let pnl = (price.current_price - h.avg_price) * h.quantity * factor;
     let pnl_pct = if h.avg_price > 0.0 {
         (price.current_price - h.avg_price) / h.avg_price * 100.0
     } else {
         0.0
     };
-    let eval = price.current_price * h.quantity;
+    let eval = price.current_price * h.quantity * factor;
     let sign = if price.change_pct >= 0.0 { "+" } else { "" };
     let pnl_sign = if pnl_pct >= 0.0 { "+" } else { "" };
     let name = if !price.name.is_empty() {

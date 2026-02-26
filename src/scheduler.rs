@@ -57,11 +57,8 @@ pub async fn run_scheduler(
 
                     if !already_done {
                         tracing::info!("Updating exchange rate...");
-                        match api.get_exchange_rate().await {
-                            Ok(rate) => {
-                                tracing::info!("USD/KRW = {rate}");
-                            }
-                            Err(e) => tracing::warn!("Exchange rate update failed: {e}"),
+                        if let Err(e) = api.get_exchange_rate().await {
+                            tracing::warn!("Exchange rate update failed: {e}");
                         }
                         last_exchange_update = Some(current_time);
                     }
