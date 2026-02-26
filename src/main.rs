@@ -30,7 +30,7 @@ async fn main() {
             }
             // config 파일이 없으면 템플릿 생성
             if !std::path::Path::new(config_path).exists() {
-                let template = include_str!("../data/config.template.json");
+                let template = include_str!("../docs/config.template.json");
                 if let Err(e) = std::fs::write(config_path, template) {
                     eprintln!("설정 파일 생성 실패: {config_path}\n  {e}");
                     return;
