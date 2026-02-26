@@ -220,7 +220,7 @@ async fn cmd_list(api: &ApiHandle) -> String {
     for h in &mut store.holdings {
         match api.get_price_for_market(h.market, &h.symbol).await {
             Ok(price) => {
-                if !price.name.is_empty() && h.name != price.name {
+                if h.name.is_empty() && !price.name.is_empty() {
                     h.name = price.name.clone();
                     names_updated = true;
                 }

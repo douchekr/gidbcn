@@ -3,8 +3,10 @@ use anyhow::{Context, Result};
 use crate::models::portfolio::PortfolioStore;
 use crate::models::signal::SignalStore;
 
-const PORTFOLIO_PATH: &str = "data/portfolio.json";
-const SIGNALS_PATH: &str = "data/signals.json";
+pub const DATA_DIR: &str = "/opt/kkuepark/gidbcn";
+pub const CONFIG_PATH: &str = "/opt/kkuepark/gidbcn/config.json";
+const PORTFOLIO_PATH: &str = "/opt/kkuepark/gidbcn/portfolio.json";
+const SIGNALS_PATH: &str = "/opt/kkuepark/gidbcn/signals.json";
 
 fn load_or_default<T: serde::de::DeserializeOwned + Default + serde::Serialize>(
     path: &str,

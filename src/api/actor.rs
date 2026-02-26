@@ -9,7 +9,7 @@ use crate::models::portfolio::Market;
 
 use super::{auth, bond, domestic, exchange, overseas};
 
-const CONFIG_PATH: &str = "data/config.json";
+use crate::storage;
 
 /// Actor 내부 상태 — 외부에서 접근 불가, actor loop만 소유
 pub struct ActorContext {
@@ -70,7 +70,7 @@ impl ActorContext {
                 tracing::info!("Token refreshed, expires at {}", token_info.expires_at);
                 self.config.token = Some(token_info.clone());
                 full_config.kis_api.token = Some(token_info);
-                if let Err(e) = full_config.save(CONFIG_PATH) {
+                if let Err(e) = full_config.save(storage::CONFIG_PATH) {
                     tracing::error!("Failed to save config after token refresh: {e}");
                 }
             }
