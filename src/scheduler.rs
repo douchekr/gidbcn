@@ -5,12 +5,12 @@ use tokio::time::{interval, Duration};
 use crate::api::ApiHandle;
 use crate::config::SchedulerConfig;
 use crate::signal::engine;
+use crate::storage;
 
 pub async fn run_scheduler(
     api: ApiHandle,
     config: SchedulerConfig,
     bot: Bot,
-    chat_id: ChatId,
 ) {
     let signal_interval = Duration::from_secs(config.signal_check_interval_minutes * 60);
     let mut signal_tick = interval(signal_interval);
@@ -29,8 +29,15 @@ pub async fn run_scheduler(
         tokio::select! {
             _ = signal_tick.tick() => {
                 if is_market_hours() {
-                    tracing::info!("Running signal check...");
-                    engine::check_all_signals(&api, &bot, chat_id).await;
+                    let user_ids = storage::list_user_ids();
+                    if user_ids.is_empty() {
+                        tracing::debug!("No users with portfolios, skipping signal check");
+                    } else {
+                        tracing::info!("Running signal check for {} users...", user_ids.len());
+                        for user_id in user_ids {
+                            engine::check_all_signals(&api, &bot, user_id).await;
+                        }
+                    }
                 }
             }
             _ = minute_tick.tick() => {
@@ -53,8 +60,6 @@ pub async fn run_scheduler(
                         match api.get_exchange_rate().await {
                             Ok(rate) => {
                                 tracing::info!("USD/KRW = {rate}");
-                                // config 업데이트는 API Actor 내부에서 처리 가능
-                                // 여기서는 로그만
                             }
                             Err(e) => tracing::warn!("Exchange rate update failed: {e}"),
                         }

@@ -23,7 +23,6 @@ pub fn evaluate(condition: &Condition, current_price: f64, avg_price: Option<f64
             }
             false
         }
-        _ => false,
     }
 }
 
@@ -69,12 +68,4 @@ mod tests {
         assert!(!evaluate(&cond, 80000.0, None));
     }
 
-    #[test]
-    fn unrelated_condition_returns_false() {
-        let cond = Condition::GoldenCross {
-            short_period: 5,
-            long_period: 20,
-        };
-        assert!(!evaluate(&cond, 80000.0, None));
-    }
 }

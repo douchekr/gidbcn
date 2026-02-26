@@ -9,11 +9,6 @@ pub enum Condition {
     PriceBelow { target: f64 },
     ProfitAbove { percentage: f64 },
     ProfitBelow { percentage: f64 },
-    GoldenCross { short_period: u32, long_period: u32 },
-    DeadCross { short_period: u32, long_period: u32 },
-    RsiAbove { threshold: f64 },
-    RsiBelow { threshold: f64 },
-    VolumeSurge { threshold_pct: f64 },
 }
 
 impl Condition {
@@ -23,23 +18,7 @@ impl Condition {
             Condition::PriceBelow { .. } => "price_below",
             Condition::ProfitAbove { .. } => "profit_above",
             Condition::ProfitBelow { .. } => "profit_below",
-            Condition::GoldenCross { .. } => "golden_cross",
-            Condition::DeadCross { .. } => "dead_cross",
-            Condition::RsiAbove { .. } => "rsi_above",
-            Condition::RsiBelow { .. } => "rsi_below",
-            Condition::VolumeSurge { .. } => "volume_surge",
         }
-    }
-
-    pub fn needs_daily_chart(&self) -> bool {
-        matches!(
-            self,
-            Condition::GoldenCross { .. }
-                | Condition::DeadCross { .. }
-                | Condition::RsiAbove { .. }
-                | Condition::RsiBelow { .. }
-                | Condition::VolumeSurge { .. }
-        )
     }
 
     pub fn display_description(&self) -> String {
@@ -48,19 +27,6 @@ impl Condition {
             Condition::PriceBelow { target } => format!("가격 ≤ {target}"),
             Condition::ProfitAbove { percentage } => format!("수익률 ≥ {percentage}%"),
             Condition::ProfitBelow { percentage } => format!("수익률 ≤ {percentage}%"),
-            Condition::GoldenCross {
-                short_period,
-                long_period,
-            } => format!("골든크로스 (MA{short_period}/{long_period})"),
-            Condition::DeadCross {
-                short_period,
-                long_period,
-            } => format!("데드크로스 (MA{short_period}/{long_period})"),
-            Condition::RsiAbove { threshold } => format!("RSI ≥ {threshold}"),
-            Condition::RsiBelow { threshold } => format!("RSI ≤ {threshold}"),
-            Condition::VolumeSurge { threshold_pct } => {
-                format!("거래량 ≥ 20일평균×{threshold_pct}%")
-            }
         }
     }
 }
@@ -114,43 +80,14 @@ mod tests {
     }
 
     #[test]
-    fn condition_serde_golden_cross() {
-        let cond = Condition::GoldenCross {
-            short_period: 5,
-            long_period: 20,
-        };
-        let json = serde_json::to_string(&cond).unwrap();
-        let parsed: Condition = serde_json::from_str(&json).unwrap();
-        match parsed {
-            Condition::GoldenCross {
-                short_period,
-                long_period,
-            } => {
-                assert_eq!(short_period, 5);
-                assert_eq!(long_period, 20);
-            }
-            _ => panic!("wrong variant"),
-        }
-    }
-
-    #[test]
-    fn condition_needs_daily_chart() {
-        assert!(!Condition::PriceAbove { target: 100.0 }.needs_daily_chart());
-        assert!(!Condition::ProfitBelow { percentage: -5.0 }.needs_daily_chart());
-        assert!(Condition::GoldenCross { short_period: 5, long_period: 20 }.needs_daily_chart());
-        assert!(Condition::RsiAbove { threshold: 70.0 }.needs_daily_chart());
-        assert!(Condition::VolumeSurge { threshold_pct: 200.0 }.needs_daily_chart());
-    }
-
-    #[test]
     fn condition_display_description() {
         assert_eq!(
             Condition::PriceAbove { target: 80000.0 }.display_description(),
             "가격 ≥ 80000"
         );
         assert_eq!(
-            Condition::RsiBelow { threshold: 30.0 }.display_description(),
-            "RSI ≤ 30"
+            Condition::ProfitBelow { percentage: -10.0 }.display_description(),
+            "수익률 ≤ -10%"
         );
     }
 

@@ -205,7 +205,6 @@ mod tests {
 
     fn make_holding(market: Market, symbol: &str, qty: f64, avg: f64) -> Holding {
         Holding {
-            id: "h_001".into(),
             market,
             symbol: symbol.into(),
             name: String::new(),

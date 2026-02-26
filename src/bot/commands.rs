@@ -47,20 +47,30 @@ pub async fn handle_command(
     api: ApiHandle,
 ) -> ResponseResult<()> {
     let chat_id = msg.chat.id;
+
+    // 텔레그램 user_id 추출 (Private 채팅에서 user_id == chat_id)
+    let user_id = match msg.from() {
+        Some(user) => user.id.0 as i64,
+        None => {
+            bot.send_message(chat_id, "사용자 정보를 확인할 수 없습니다.").await?;
+            return Ok(());
+        }
+    };
+
     let reply = match cmd {
         Command::Help => help_text(),
         Command::Ping => "pong".to_string(),
-        Command::Add(args) => cmd_add(&args),
-        Command::Remove(args) => cmd_remove(&args),
-        Command::Edit(args) => cmd_edit(&args),
-        Command::List => cmd_list(&api).await,
-        Command::Info(args) => cmd_info(&args, &api).await,
-        Command::Summary => cmd_summary(&api).await,
-        Command::Signal(args) => cmd_signal(&args),
-        Command::SignalList => cmd_signal_list(),
-        Command::SignalRemove(args) => cmd_signal_remove(&args),
-        Command::SignalClear(args) => cmd_signal_clear(&args),
-        Command::Status => cmd_status(),
+        Command::Add(args) => cmd_add(user_id, &args),
+        Command::Remove(args) => cmd_remove(user_id, &args),
+        Command::Edit(args) => cmd_edit(user_id, &args),
+        Command::List => cmd_list(user_id, &api).await,
+        Command::Info(args) => cmd_info(user_id, &args, &api).await,
+        Command::Summary => cmd_summary(user_id, &api).await,
+        Command::Signal(args) => cmd_signal(user_id, &args),
+        Command::SignalList => cmd_signal_list(user_id),
+        Command::SignalRemove(args) => cmd_signal_remove(user_id, &args),
+        Command::SignalClear(args) => cmd_signal_clear(user_id, &args),
+        Command::Status => cmd_status(user_id),
     };
 
     bot.send_message(chat_id, reply).await?;
@@ -90,14 +100,13 @@ fn help_text() -> String {
      /status — 시스템 상태\n\
      /ping — 핑\n\n\
      마켓: KRX, NAS, NYS, AMS, BOND\n\
-     조건: price_above, price_below, profit_above, profit_below,\n\
-     golden_cross, dead_cross, rsi_above, rsi_below, volume_surge"
+     조건: price_above, price_below, profit_above, profit_below"
         .to_string()
 }
 
 // --- 포트폴리오 ---
 
-fn cmd_add(args: &str) -> String {
+fn cmd_add(user_id: i64, args: &str) -> String {
     let parts: Vec<&str> = args.split_whitespace().collect();
     if parts.len() < 4 {
         return "사용법: /add [마켓] [종목코드] [수량] [매입가] [종목명]\n예: /add KRX 005930 10 70000 삼성전자".to_string();
@@ -122,14 +131,12 @@ fn cmd_add(args: &str) -> String {
         String::new()
     };
 
-    let mut store = storage::load_portfolio();
+    let mut store = storage::load_portfolio(user_id);
     if store.holdings.iter().any(|h| h.symbol == symbol) {
         return format!("{symbol} 은(는) 이미 등록된 종목입니다. /edit 으로 수정하세요.");
     }
 
-    let id = store.next_holding_id();
     store.holdings.push(Holding {
-        id: id.clone(),
         market,
         symbol: symbol.clone(),
         name,
@@ -138,20 +145,20 @@ fn cmd_add(args: &str) -> String {
         added_at: kst_now(),
     });
 
-    if let Err(e) = storage::save_portfolio(&store) {
+    if let Err(e) = storage::save_portfolio(user_id, &store) {
         return format!("저장 실패: {e}");
     }
 
-    format!("✅ {symbol} ({market}) 추가 완료 [{id}]")
+    format!("✅ {symbol} ({market}) 추가 완료")
 }
 
-fn cmd_remove(args: &str) -> String {
+fn cmd_remove(user_id: i64, args: &str) -> String {
     let symbol = args.trim();
     if symbol.is_empty() {
         return "사용법: /remove [종목코드]".to_string();
     }
 
-    let mut store = storage::load_portfolio();
+    let mut store = storage::load_portfolio(user_id);
     let before = store.holdings.len();
     store.holdings.retain(|h| h.symbol != symbol);
 
@@ -159,14 +166,14 @@ fn cmd_remove(args: &str) -> String {
         return format!("{symbol} 을(를) 찾을 수 없습니다.");
     }
 
-    if let Err(e) = storage::save_portfolio(&store) {
+    if let Err(e) = storage::save_portfolio(user_id, &store) {
         return format!("저장 실패: {e}");
     }
 
     format!("✅ {symbol} 삭제 완료")
 }
 
-fn cmd_edit(args: &str) -> String {
+fn cmd_edit(user_id: i64, args: &str) -> String {
     let parts: Vec<&str> = args.split_whitespace().collect();
     if parts.len() < 3 {
         return "사용법: /edit [종목코드] [수량] [매입가]".to_string();
@@ -182,7 +189,7 @@ fn cmd_edit(args: &str) -> String {
         Err(_) => return "매입가는 숫자여야 합니다.".to_string(),
     };
 
-    let mut store = storage::load_portfolio();
+    let mut store = storage::load_portfolio(user_id);
     let holding = match store.holdings.iter_mut().find(|h| h.symbol == symbol) {
         Some(h) => h,
         None => return format!("{symbol} 을(를) 찾을 수 없습니다."),
@@ -191,15 +198,15 @@ fn cmd_edit(args: &str) -> String {
     holding.quantity = quantity;
     holding.avg_price = avg_price;
 
-    if let Err(e) = storage::save_portfolio(&store) {
+    if let Err(e) = storage::save_portfolio(user_id, &store) {
         return format!("저장 실패: {e}");
     }
 
     format!("✅ {symbol} 수정 완료 (수량: {quantity}, 매입가: {avg_price})")
 }
 
-async fn cmd_list(api: &ApiHandle) -> String {
-    let mut store = storage::load_portfolio();
+async fn cmd_list(user_id: i64, api: &ApiHandle) -> String {
+    let mut store = storage::load_portfolio(user_id);
     if store.holdings.is_empty() {
         return "포트폴리오가 비어있습니다. /add 로 종목을 추가하세요.".to_string();
     }
@@ -257,7 +264,7 @@ async fn cmd_list(api: &ApiHandle) -> String {
     }
 
     if names_updated {
-        if let Err(e) = storage::save_portfolio(&store) {
+        if let Err(e) = storage::save_portfolio(user_id, &store) {
             tracing::warn!("Failed to save portfolio names: {e}");
         }
     }
@@ -290,19 +297,19 @@ async fn cmd_list(api: &ApiHandle) -> String {
     msg
 }
 
-async fn cmd_info(args: &str, api: &ApiHandle) -> String {
+async fn cmd_info(user_id: i64, args: &str, api: &ApiHandle) -> String {
     let symbol = args.trim();
     if symbol.is_empty() {
         return "사용법: /info [종목코드]".to_string();
     }
 
-    let store = storage::load_portfolio();
+    let store = storage::load_portfolio(user_id);
     let holding = match store.holdings.iter().find(|h| h.symbol == symbol) {
         Some(h) => h,
         None => return format!("{symbol} 을(를) 포트폴리오에서 찾을 수 없습니다."),
     };
 
-    let signal_store = storage::load_signals();
+    let signal_store = storage::load_signals(user_id);
     let signals: Vec<&Signal> = signal_store
         .signals
         .iter()
@@ -335,8 +342,8 @@ async fn cmd_info(args: &str, api: &ApiHandle) -> String {
     }
 }
 
-async fn cmd_summary(api: &ApiHandle) -> String {
-    let store = storage::load_portfolio();
+async fn cmd_summary(user_id: i64, api: &ApiHandle) -> String {
+    let store = storage::load_portfolio(user_id);
     if store.holdings.is_empty() {
         return "포트폴리오가 비어있습니다.".to_string();
     }
@@ -412,7 +419,7 @@ async fn cmd_summary(api: &ApiHandle) -> String {
 
 // --- 시그널 ---
 
-fn cmd_signal(args: &str) -> String {
+fn cmd_signal(user_id: i64, args: &str) -> String {
     let parts: Vec<&str> = args.split_whitespace().collect();
     if parts.len() < 3 {
         return "사용법: /signal [종목코드] [조건타입] [파라미터...]\n\
@@ -427,7 +434,7 @@ fn cmd_signal(args: &str) -> String {
         Err(e) => return e,
     };
 
-    let mut store = storage::load_signals();
+    let mut store = storage::load_signals(user_id);
     let id = store.next_signal_id();
     store.signals.push(Signal {
         id: id.clone(),
@@ -437,7 +444,7 @@ fn cmd_signal(args: &str) -> String {
         created_at: kst_now(),
     });
 
-    if let Err(e) = storage::save_signals(&store) {
+    if let Err(e) = storage::save_signals(user_id, &store) {
         return format!("저장 실패: {e}");
     }
 
@@ -447,8 +454,8 @@ fn cmd_signal(args: &str) -> String {
     )
 }
 
-fn cmd_signal_list() -> String {
-    let store = storage::load_signals();
+fn cmd_signal_list(user_id: i64) -> String {
+    let store = storage::load_signals(user_id);
     if store.signals.is_empty() {
         return "설정된 시그널이 없습니다.".to_string();
     }
@@ -466,13 +473,13 @@ fn cmd_signal_list() -> String {
     msg
 }
 
-fn cmd_signal_remove(args: &str) -> String {
+fn cmd_signal_remove(user_id: i64, args: &str) -> String {
     let signal_id = args.trim();
     if signal_id.is_empty() {
         return "사용법: /signal_remove [시그널ID]".to_string();
     }
 
-    let mut store = storage::load_signals();
+    let mut store = storage::load_signals(user_id);
     let before = store.signals.len();
     store.signals.retain(|s| s.id != signal_id);
 
@@ -480,20 +487,20 @@ fn cmd_signal_remove(args: &str) -> String {
         return format!("{signal_id} 을(를) 찾을 수 없습니다.");
     }
 
-    if let Err(e) = storage::save_signals(&store) {
+    if let Err(e) = storage::save_signals(user_id, &store) {
         return format!("저장 실패: {e}");
     }
 
     format!("✅ 시그널 {signal_id} 삭제 완료")
 }
 
-fn cmd_signal_clear(args: &str) -> String {
+fn cmd_signal_clear(user_id: i64, args: &str) -> String {
     let symbol = args.trim();
     if symbol.is_empty() {
         return "사용법: /signal_clear [종목코드]".to_string();
     }
 
-    let mut store = storage::load_signals();
+    let mut store = storage::load_signals(user_id);
     let before = store.signals.len();
     store.signals.retain(|s| s.symbol != symbol);
     let removed = before - store.signals.len();
@@ -502,16 +509,16 @@ fn cmd_signal_clear(args: &str) -> String {
         return format!("{symbol}에 설정된 시그널이 없습니다.");
     }
 
-    if let Err(e) = storage::save_signals(&store) {
+    if let Err(e) = storage::save_signals(user_id, &store) {
         return format!("저장 실패: {e}");
     }
 
     format!("✅ {symbol} 시그널 {removed}개 삭제 완료")
 }
 
-fn cmd_status() -> String {
-    let portfolio = storage::load_portfolio();
-    let signals = storage::load_signals();
+fn cmd_status(user_id: i64) -> String {
+    let portfolio = storage::load_portfolio(user_id);
+    let signals = storage::load_signals(user_id);
     let active = signals.signals.iter().filter(|s| s.active).count();
     format!(
         "📊 시스템 상태\n\
@@ -541,38 +548,9 @@ fn parse_condition(cond_type: &str, params: &[&str]) -> Result<Condition, String
             let percentage = parse_param_f64(params, 0, "percentage")?;
             Ok(Condition::ProfitBelow { percentage })
         }
-        "golden_cross" => {
-            let short = parse_param_u32(params, 0, "short_period")?;
-            let long = parse_param_u32(params, 1, "long_period")?;
-            Ok(Condition::GoldenCross {
-                short_period: short,
-                long_period: long,
-            })
-        }
-        "dead_cross" => {
-            let short = parse_param_u32(params, 0, "short_period")?;
-            let long = parse_param_u32(params, 1, "long_period")?;
-            Ok(Condition::DeadCross {
-                short_period: short,
-                long_period: long,
-            })
-        }
-        "rsi_above" => {
-            let threshold = parse_param_f64(params, 0, "threshold")?;
-            Ok(Condition::RsiAbove { threshold })
-        }
-        "rsi_below" => {
-            let threshold = parse_param_f64(params, 0, "threshold")?;
-            Ok(Condition::RsiBelow { threshold })
-        }
-        "volume_surge" => {
-            let threshold_pct = parse_param_f64(params, 0, "threshold_pct")?;
-            Ok(Condition::VolumeSurge { threshold_pct })
-        }
         _ => Err(format!(
             "알 수 없는 조건: {cond_type}\n\
-             사용 가능: price_above, price_below, profit_above, profit_below, \
-             golden_cross, dead_cross, rsi_above, rsi_below, volume_surge"
+             사용 가능: price_above, price_below, profit_above, profit_below"
         )),
     }
 }
@@ -585,10 +563,3 @@ fn parse_param_f64(params: &[&str], idx: usize, name: &str) -> Result<f64, Strin
         .map_err(|_| format!("{name}은(는) 숫자여야 합니다."))
 }
 
-fn parse_param_u32(params: &[&str], idx: usize, name: &str) -> Result<u32, String> {
-    params
-        .get(idx)
-        .ok_or_else(|| format!("{name} 파라미터가 필요합니다."))?
-        .parse::<u32>()
-        .map_err(|_| format!("{name}은(는) 정수여야 합니다."))
-}

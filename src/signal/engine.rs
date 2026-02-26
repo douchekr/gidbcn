@@ -2,18 +2,17 @@ use teloxide::prelude::*;
 
 use crate::api::ApiHandle;
 use crate::bot::formatter;
-use crate::models::signal::Condition;
 use crate::storage;
 
-use super::{price, technical, volume};
+use super::price;
 
-/// 모든 활성 시그널을 순회하며 조건 평가. 발동 시 텔레그램 알림 전송.
-pub async fn check_all_signals(api: &ApiHandle, bot: &Bot, chat_id: ChatId) {
-    let portfolio = storage::load_portfolio();
-    let mut signal_store = storage::load_signals();
+/// 특정 사용자의 활성 시그널을 순회하며 조건 평가. 발동 시 텔레그램 알림 전송.
+pub async fn check_all_signals(api: &ApiHandle, bot: &Bot, user_id: i64) {
+    let chat_id = ChatId(user_id);
+    let portfolio = storage::load_portfolio(user_id);
+    let mut signal_store = storage::load_signals(user_id);
     let mut any_triggered = false;
 
-    // 활성 시그널만 처리
     let active_indices: Vec<usize> = signal_store
         .signals
         .iter()
@@ -26,14 +25,12 @@ pub async fn check_all_signals(api: &ApiHandle, bot: &Bot, chat_id: ChatId) {
         let signal = &signal_store.signals[idx];
         let symbol = &signal.symbol;
 
-        // 포트폴리오에서 해당 종목 찾기
         let holding = portfolio.holdings.iter().find(|h| h.symbol == *symbol);
         let market = match holding {
             Some(h) => h.market,
-            None => continue, // 포트폴리오에 없으면 스킵
+            None => continue,
         };
 
-        // 현재가 조회
         let price_data = match api.get_price_for_market(market, symbol).await {
             Ok(p) => p,
             Err(e) => {
@@ -43,23 +40,7 @@ pub async fn check_all_signals(api: &ApiHandle, bot: &Bot, chat_id: ChatId) {
         };
 
         let avg_price = holding.map(|h| h.avg_price);
-        let triggered = if signal.condition.needs_daily_chart() {
-            // 일봉 기반 시그널
-            match api.get_daily_chart(market, symbol).await {
-                Ok(candles) => match &signal.condition {
-                    Condition::VolumeSurge { .. } => {
-                        volume::evaluate(&signal.condition, &candles, price_data.volume)
-                    }
-                    _ => technical::evaluate(&signal.condition, &candles),
-                },
-                Err(e) => {
-                    tracing::warn!("Signal check: failed to get chart for {symbol}: {e}");
-                    false
-                }
-            }
-        } else {
-            price::evaluate(&signal.condition, price_data.current_price, avg_price)
-        };
+        let triggered = price::evaluate(&signal.condition, price_data.current_price, avg_price);
 
         if triggered {
             any_triggered = true;
@@ -73,24 +54,22 @@ pub async fn check_all_signals(api: &ApiHandle, bot: &Bot, chat_id: ChatId) {
                 avg_price,
             );
 
-            // 텔레그램 전송
             match bot.send_message(chat_id, &alert_msg).await {
                 Ok(_) => {
-                    tracing::info!("Signal triggered: {} {}", signal.id, condition_desc);
+                    tracing::info!("Signal triggered: {} {} (user {})", signal.id, condition_desc, user_id);
                 }
                 Err(e) => {
-                    tracing::error!("Failed to send alert for {}: {e}", signal.id);
+                    tracing::error!("Failed to send alert for {} (user {}): {e}", signal.id, user_id);
                 }
             }
 
-            // 1회성 발동 → 비활성화
             signal_store.signals[idx].active = false;
         }
     }
 
     if any_triggered {
-        if let Err(e) = storage::save_signals(&signal_store) {
-            tracing::error!("Failed to save signals after trigger: {e}");
+        if let Err(e) = storage::save_signals(user_id, &signal_store) {
+            tracing::error!("Failed to save signals after trigger (user {}): {e}", user_id);
         }
     }
 }

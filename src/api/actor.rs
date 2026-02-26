@@ -1,5 +1,4 @@
 use anyhow::Result;
-use chrono::{FixedOffset, Utc};
 use reqwest::header::{HeaderMap, HeaderValue};
 use tokio::sync::{mpsc, oneshot};
 
@@ -112,26 +111,6 @@ pub async fn run_api_actor(mut rx: mpsc::Receiver<ApiRequest>, full_config: Conf
                 let result = overseas::get_price(&ctx, &exch, &symbol).await;
                 let _ = respond_to.send(result);
             }
-            ApiRequest::GetDailyChart {
-                market,
-                symbol,
-                respond_to,
-            } => {
-                ctx.rate_limit().await;
-                let kst = FixedOffset::east_opt(9 * 3600).unwrap();
-                let today = Utc::now().with_timezone(&kst).format("%Y%m%d").to_string();
-                let result = match market {
-                    Market::KRX => domestic::get_daily_chart(&ctx, &symbol, "20240101", &today).await,
-                    Market::NAS | Market::NYS | Market::AMS => {
-                        overseas::get_daily_chart(&ctx, market.exchange_code(), &symbol, &today).await
-                    }
-                    Market::BOND => {
-                        // 채권은 일봉 미지원
-                        Ok(Vec::new())
-                    }
-                };
-                let _ = respond_to.send(result);
-            }
             ApiRequest::GetBondPrice { isin, respond_to } => {
                 ctx.rate_limit().await;
                 let result = bond::get_price(&ctx, &isin).await;
@@ -183,22 +162,6 @@ impl ApiHandle {
         self.sender
             .send(ApiRequest::GetOverseasPrice {
                 exchange: exchange.to_string(),
-                symbol: symbol.to_string(),
-                respond_to: tx,
-            })
-            .await?;
-        rx.await?
-    }
-
-    pub async fn get_daily_chart(
-        &self,
-        market: Market,
-        symbol: &str,
-    ) -> Result<Vec<crate::models::messages::DailyCandle>> {
-        let (tx, rx) = oneshot::channel();
-        self.sender
-            .send(ApiRequest::GetDailyChart {
-                market,
                 symbol: symbol.to_string(),
                 respond_to: tx,
             })

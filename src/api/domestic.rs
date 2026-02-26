@@ -1,22 +1,34 @@
 use anyhow::{Context, Result};
 
-use crate::models::messages::{DailyCandle, PriceData};
+use crate::models::messages::PriceData;
 
 use super::actor::ActorContext;
 
 pub async fn get_price(ctx: &ActorContext, symbol: &str) -> Result<PriceData> {
+    // inquire-price 엔드포인트에는 hts_kor_isnm(종목명) 필드가 없음.
+    // inquire-daily-itemchartprice의 output1은 현재가 + 종목명을 모두 포함.
     let url = format!(
-        "{}/uapi/domestic-stock/v1/quotations/inquire-price",
+        "{}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice",
         ctx.config.base_url
     );
+
+    let kst = chrono::FixedOffset::east_opt(9 * 3600).unwrap();
+    let today = chrono::Utc::now()
+        .with_timezone(&kst)
+        .format("%Y%m%d")
+        .to_string();
 
     let resp: serde_json::Value = ctx
         .client
         .get(&url)
-        .headers(ctx.common_headers("FHKST01010100")?)
+        .headers(ctx.common_headers("FHKST03010100")?)
         .query(&[
             ("FID_COND_MRKT_DIV_CODE", "J"),
             ("FID_INPUT_ISCD", symbol),
+            ("FID_INPUT_DATE_1", today.as_str()),
+            ("FID_INPUT_DATE_2", today.as_str()),
+            ("FID_PERIOD_DIV_CODE", "D"),
+            ("FID_ORG_ADJ_PRC", "0"),
         ])
         .send()
         .await
@@ -25,7 +37,7 @@ pub async fn get_price(ctx: &ActorContext, symbol: &str) -> Result<PriceData> {
         .await
         .context("Domestic price parse failed")?;
 
-    let output = &resp["output"];
+    let output = &resp["output1"];
     Ok(PriceData {
         name: output["hts_kor_isnm"]
             .as_str()
@@ -38,61 +50,6 @@ pub async fn get_price(ctx: &ActorContext, symbol: &str) -> Result<PriceData> {
     })
 }
 
-pub async fn get_daily_chart(
-    ctx: &ActorContext,
-    symbol: &str,
-    from: &str,
-    to: &str,
-) -> Result<Vec<DailyCandle>> {
-    let url = format!(
-        "{}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice",
-        ctx.config.base_url
-    );
-
-    let resp: serde_json::Value = ctx
-        .client
-        .get(&url)
-        .headers(ctx.common_headers("FHKST03010100")?)
-        .query(&[
-            ("FID_COND_MRKT_DIV_CODE", "J"),
-            ("FID_INPUT_ISCD", symbol),
-            ("FID_INPUT_DATE_1", from),
-            ("FID_INPUT_DATE_2", to),
-            ("FID_PERIOD_DIV_CODE", "D"),
-            ("FID_ORG_ADJ_PRC", "0"),
-        ])
-        .send()
-        .await
-        .context("Domestic daily chart request failed")?
-        .json()
-        .await
-        .context("Domestic daily chart parse failed")?;
-
-    let items = resp["output2"]
-        .as_array()
-        .map(|a| a.as_slice())
-        .unwrap_or(&[]);
-
-    let candles = items
-        .iter()
-        .filter_map(|item| {
-            let date = item["stck_bsop_date"].as_str()?.to_string();
-            if date.is_empty() {
-                return None;
-            }
-            Some(DailyCandle {
-                date,
-                open: parse_f64(item["stck_oprc"].as_str()),
-                high: parse_f64(item["stck_hgpr"].as_str()),
-                low: parse_f64(item["stck_lwpr"].as_str()),
-                close: parse_f64(item["stck_clpr"].as_str()),
-                volume: parse_u64(item["acml_vol"].as_str()),
-            })
-        })
-        .collect();
-
-    Ok(candles)
-}
 
 fn parse_f64(s: Option<&str>) -> f64 {
     s.and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0)

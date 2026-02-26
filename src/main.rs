@@ -40,7 +40,6 @@ async fn main() {
             eprintln!();
             eprintln!("아래 항목을 수정한 후 다시 실행하세요:");
             eprintln!("  - telegram.bot_token: 텔레그램 봇 토큰");
-            eprintln!("  - telegram.chat_id: 텔레그램 채팅 ID");
             eprintln!("  - kis_api.app_key / app_secret: 한투 API 키 (선택)");
             return;
         }
@@ -53,13 +52,11 @@ async fn main() {
 
     // 3. 텔레그램 봇 + 스케줄러 spawn
     let tg_bot = Bot::new(&config.telegram.bot_token);
-    let chat_id = ChatId(config.telegram.chat_id);
 
     tokio::spawn(scheduler::run_scheduler(
         api_handle.clone(),
         config.scheduler.clone(),
         tg_bot.clone(),
-        chat_id,
     ));
 
     tracing::info!("Bot and scheduler running");

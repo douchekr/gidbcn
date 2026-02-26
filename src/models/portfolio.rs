@@ -51,7 +51,6 @@ impl Market {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Holding {
-    pub id: String,
     pub market: Market,
     pub symbol: String,
     #[serde(default)]
@@ -61,27 +60,9 @@ pub struct Holding {
     pub added_at: DateTime<FixedOffset>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PortfolioStore {
-    pub next_id: u64,
     pub holdings: Vec<Holding>,
-}
-
-impl Default for PortfolioStore {
-    fn default() -> Self {
-        Self {
-            next_id: 1,
-            holdings: Vec::new(),
-        }
-    }
-}
-
-impl PortfolioStore {
-    pub fn next_holding_id(&mut self) -> String {
-        let id = format!("h_{:03}", self.next_id);
-        self.next_id += 1;
-        id
-    }
 }
 
 #[cfg(test)]
@@ -115,19 +96,9 @@ mod tests {
     }
 
     #[test]
-    fn next_holding_id_increments() {
-        let mut store = PortfolioStore::default();
-        assert_eq!(store.next_holding_id(), "h_001");
-        assert_eq!(store.next_holding_id(), "h_002");
-        assert_eq!(store.next_holding_id(), "h_003");
-    }
-
-    #[test]
     fn portfolio_serde_roundtrip() {
         let store = PortfolioStore {
-            next_id: 2,
             holdings: vec![Holding {
-                id: "h_001".into(),
                 market: Market::KRX,
                 symbol: "005930".into(),
                 name: "삼성전자".into(),
@@ -139,7 +110,6 @@ mod tests {
         };
         let json = serde_json::to_string(&store).unwrap();
         let parsed: PortfolioStore = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.next_id, 2);
         assert_eq!(parsed.holdings.len(), 1);
         assert_eq!(parsed.holdings[0].symbol, "005930");
         assert_eq!(parsed.holdings[0].market, Market::KRX);
