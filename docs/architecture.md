@@ -1,5 +1,60 @@
 # 구현 아키텍처
 
+## 봇 명령 처리 흐름
+
+텔레그램 명령 수신부터 파일 저장까지의 흐름:
+
+```
+사용자 텔레그램 메시지
+  → teloxide 디스패처 (handler.rs)
+  → handle_command() (commands.rs)
+       │
+       ├─ [포트폴리오 조회 없는 명령: /add, /remove, /edit, /signal*]
+       │    storage::load_*()          // std::fs로 JSON 읽기
+       │    데이터 변경
+       │    storage::save_*()          // std::fs로 JSON 쓰기
+       │    응답 문자열 반환
+       │
+       └─ [현재가 필요한 명령: /list, /info, /summary]
+            storage::load_portfolio()
+            api.get_price_for_market() ──► API Actor (mpsc)
+                                          reqwest → 한투 API
+                                      ◄── PriceData (oneshot)
+            formatter로 메시지 생성
+            [이름 캐싱] storage::save_portfolio()  // name 비어있던 경우만
+            응답 문자열 반환
+  → bot.send_message()
+```
+
+**JSON 파일 경로**: `/opt/kkuepark/gidbcn/portfolio_{user_id}.json`, `signals_{user_id}.json`
+**동기 I/O**: `std::fs` 직접 사용 (수 KB 파일, current_thread에서 블로킹 무시 가능)
+
+---
+
+## 스케줄 작업
+
+`tokio::select!`로 두 interval을 동시 대기:
+
+```
+minute_tick (1분마다)
+  → 현재 KST 시각 확인
+  → 08:50 또는 15:40이면: api.get_exchange_rate() → config.json 갱신
+
+signal_tick (기본 5분마다)
+  → is_market_hours()?
+      KRX: 09:00~15:30 KST
+      US:  22:30~05:00 KST
+  → 장중 아니면 스킵
+  → storage::list_user_ids()로 사용자 목록 조회
+  → 각 사용자별 check_all_signals()
+       활성 시그널 순회 → 현재가 조회 → 조건 평가
+       발동 시: 텔레그램 알림 전송 + active=false 저장
+```
+
+**토큰 갱신**: API Actor가 매 요청 전 `token_needs_refresh()`를 확인. 만료 1시간 전이면 자동 갱신 후 `config.json` 저장.
+
+---
+
 ## Actor 간 통신
 
 ### 채널 구성
@@ -60,7 +115,6 @@ impl ApiHandle {
 pub enum ApiRequest {
     GetDomesticPrice   { symbol, respond_to: oneshot::Sender<Result<PriceData>> },
     GetOverseasPrice   { exchange, symbol, respond_to: ... },
-    GetDailyChart      { market, symbol, respond_to: ... },
     GetBondPrice       { isin, respond_to: ... },
     GetExchangeRate    { respond_to: ... },
     RefreshToken,      // fire-and-forget
@@ -125,37 +179,17 @@ Mutex 없이 채널만으로 동시성 확보.
        2. 활성(active=true) 시그널만 순회
        3. 포트폴리오에서 종목의 Market 파악 (없으면 스킵)
        4. API Actor에 현재가 요청 (mpsc/oneshot)
-       5. needs_daily_chart()이면 일봉도 추가 요청
-       6. 조건 평가 → 발동 시 텔레그램 전송 + active=false 저장
+       5. 조건 평가 → 발동 시 텔레그램 전송 + active=false 저장
 ```
 
 ### 조건별 판정
 
-| 조건 | API 호출 | 판정 로직 |
-|------|----------|-----------|
-| `price_above` | 현재가 1회 | `current_price >= target` |
-| `price_below` | 현재가 1회 | `current_price <= target` |
-| `profit_above` | 현재가 1회 | `(current - avg) / avg * 100 >= percentage` |
-| `profit_below` | 현재가 1회 | `(current - avg) / avg * 100 <= percentage` |
-| `golden_cross` | 현재가 + 일봉 | 어제 `short_ma <= long_ma` → 오늘 `short_ma > long_ma` |
-| `dead_cross` | 현재가 + 일봉 | 어제 `short_ma >= long_ma` → 오늘 `short_ma < long_ma` |
-| `rsi_above` | 현재가 + 일봉 | 14일 RSI >= threshold (데이터 부족 시 50.0 반환) |
-| `rsi_below` | 현재가 + 일봉 | 14일 RSI <= threshold |
-| `volume_surge` | 현재가 + 일봉 | `현재거래량 / 20일평균거래량 * 100 >= threshold_pct` |
-
-### 기술적 지표 계산
-
-**SMA (단순이동평균)**: candles[0..period]의 종가 평균. candles[0]이 최신.
-
-**Golden/Dead Cross**: 오늘과 어제의 short/long SMA를 비교. long+1개 캔들 필요.
-- Golden: 어제 short <= long, 오늘 short > long (상향돌파)
-- Dead: 어제 short >= long, 오늘 short < long (하향돌파)
-
-**RSI**: 14일 기간. `gains/losses` 합산 → `RS = avg_gain / avg_loss` → `100 - 100/(1+RS)`.
-- 데이터 부족(< 15캔들): 50.0 (중립) 반환
-- 전부 상승: 100.0 / 전부 하락: 0에 수렴
-
-**Volume Surge**: 20일 평균 거래량 대비 현재 거래량 비율(%). 캔들 20개 미만이면 있는 만큼 사용.
+| 조건 | 판정 로직 |
+|------|-----------|
+| `price_above` | `current_price >= target` |
+| `price_below` | `current_price <= target` |
+| `profit_above` | `(current - avg) / avg * 100 >= percentage` |
+| `profit_below` | `(current - avg) / avg * 100 <= percentage` |
 
 ### 발동 후 처리
 
