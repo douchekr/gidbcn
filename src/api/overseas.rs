@@ -26,17 +26,11 @@ pub async fn get_price(ctx: &ActorContext, exchange: &str, symbol: &str) -> Resu
     Ok(PriceData {
         name: output["name"].as_str().unwrap_or("").to_string(),
         current_price: parse_f64(output["last"].as_str()),
-        change: parse_f64(output["diff"].as_str()),
         change_pct: parse_f64(output["rate"].as_str()),
-        volume: parse_u64(output["tvol"].as_str()),
     })
 }
 
 
 fn parse_f64(s: Option<&str>) -> f64 {
     s.and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0)
-}
-
-fn parse_u64(s: Option<&str>) -> u64 {
-    s.and_then(|v| v.parse::<u64>().ok()).unwrap_or(0)
 }

@@ -6,15 +6,12 @@ use tokio::sync::oneshot;
 pub struct PriceData {
     pub name: String,
     pub current_price: f64,
-    pub change: f64,
     pub change_pct: f64,
-    pub volume: u64,
 }
 
 #[derive(Debug)]
 pub struct BondData {
     pub current_price: f64,
-    pub yield_rate: f64,
 }
 
 pub enum ApiRequest {
@@ -34,5 +31,4 @@ pub enum ApiRequest {
     GetExchangeRate {
         respond_to: oneshot::Sender<Result<f64>>,
     },
-    RefreshToken,
 }

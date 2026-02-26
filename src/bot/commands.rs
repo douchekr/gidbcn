@@ -35,7 +35,7 @@ pub async fn handle_command(
     let chat_id = msg.chat.id;
 
     // 텔레그램 user_id 추출 (Private 채팅에서 user_id == chat_id)
-    let user_id = match msg.from() {
+    let user_id = match &msg.from {
         Some(user) => user.id.0 as i64,
         None => {
             bot.send_message(chat_id, "사용자 정보를 확인할 수 없습니다.").await?;
@@ -263,9 +263,7 @@ async fn cmd_list(user_id: i64, api: &ApiHandle) -> String {
                     let cached_price_data = PriceData {
                         name: h.name.clone(),
                         current_price: cp,
-                        change: 0.0,
                         change_pct: 0.0,
-                        volume: 0,
                     };
                     let eval = cp * h.quantity;
                     let cost = h.avg_price * h.quantity;

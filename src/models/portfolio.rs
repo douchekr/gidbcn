@@ -35,10 +35,6 @@ impl Market {
         }
     }
 
-    pub fn is_domestic(&self) -> bool {
-        matches!(self, Market::KRX | Market::BOND)
-    }
-
     pub fn exchange_code(&self) -> &str {
         match self {
             Market::NAS => "NAS",
@@ -80,15 +76,6 @@ mod tests {
         assert_eq!(Market::from_str("Nys"), Some(Market::NYS));
         assert_eq!(Market::from_str("BOND"), Some(Market::BOND));
         assert_eq!(Market::from_str("INVALID"), None);
-    }
-
-    #[test]
-    fn market_is_domestic() {
-        assert!(Market::KRX.is_domestic());
-        assert!(Market::BOND.is_domestic());
-        assert!(!Market::NAS.is_domestic());
-        assert!(!Market::NYS.is_domestic());
-        assert!(!Market::AMS.is_domestic());
     }
 
     #[test]

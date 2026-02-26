@@ -226,9 +226,7 @@ mod tests {
         PriceData {
             name: name.into(),
             current_price: current,
-            change: 0.0,
             change_pct,
-            volume: 0,
         }
     }
 

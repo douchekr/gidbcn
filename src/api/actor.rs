@@ -123,9 +123,6 @@ pub async fn run_api_actor(mut rx: mpsc::Receiver<ApiRequest>, full_config: Conf
                 let result = exchange::get_usd_krw(&ctx).await;
                 let _ = respond_to.send(result);
             }
-            ApiRequest::RefreshToken => {
-                ctx.refresh_token(&mut full_config).await;
-            }
         }
     }
 
@@ -190,11 +187,6 @@ impl ApiHandle {
         rx.await?
     }
 
-    pub async fn refresh_token(&self) -> Result<()> {
-        self.sender.send(ApiRequest::RefreshToken).await?;
-        Ok(())
-    }
-
     /// Market에 따라 적절한 현재가 API 호출
     pub async fn get_price_for_market(
         &self,
@@ -211,9 +203,7 @@ impl ApiHandle {
                 Ok(crate::models::messages::PriceData {
                     name: String::new(),
                     current_price: bond.current_price,
-                    change: 0.0,
                     change_pct: 0.0,
-                    volume: 0,
                 })
             }
         }

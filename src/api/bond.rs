@@ -28,7 +28,6 @@ pub async fn get_price(ctx: &ActorContext, isin: &str) -> Result<BondData> {
     let output = &resp["output"];
     Ok(BondData {
         current_price: parse_f64(output["bond_prpr"].as_str()),
-        yield_rate: parse_f64(output["bond_yield"].as_str()),
     })
 }
 
