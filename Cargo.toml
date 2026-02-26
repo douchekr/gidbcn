@@ -1,0 +1,15 @@
+[package]
+name = "gidbcn"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["rt", "macros", "time", "sync"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+teloxide = { version = "0.13", features = ["macros"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+anyhow = "1"
