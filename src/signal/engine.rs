@@ -57,7 +57,6 @@ pub async fn check_all_signals(api: &ApiHandle, bot: &Bot, user_id: i64) {
         );
 
         if triggered {
-            any_triggered = true;
             let condition_desc = signal_store.signals[idx].condition.display_description();
             let alert_msg = formatter::format_signal_alert(
                 &symbol,
@@ -71,13 +70,14 @@ pub async fn check_all_signals(api: &ApiHandle, bot: &Bot, user_id: i64) {
             match bot.send_message(chat_id, &alert_msg).await {
                 Ok(_) => {
                     tracing::info!("Signal triggered: {} {} (user {})", signal_store.signals[idx].id, condition_desc, user_id);
+                    signal_store.signals[idx].active = false;
+                    any_triggered = true;
                 }
                 Err(e) => {
-                    tracing::error!("Failed to send alert for {} (user {}): {e}", signal_store.signals[idx].id, user_id);
+                    // 전송 실패 시 active 유지 → 다음 주기에 재시도
+                    tracing::error!("Failed to send alert for {} (user {}): {e} — keeping active for retry", signal_store.signals[idx].id, user_id);
                 }
             }
-
-            signal_store.signals[idx].active = false;
         }
     }
 
