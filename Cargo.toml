@@ -13,3 +13,4 @@ teloxide = { version = "0.13", default-features = false, features = ["macros", "
 tracing = "0.1"
 tracing-subscriber = "0.3"
 anyhow = "1"
+uuid = { version = "1", features = ["v4"] }

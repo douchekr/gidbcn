@@ -1,3 +1,4 @@
+use chrono::{FixedOffset, Utc};
 use teloxide::prelude::*;
 
 use crate::api::ApiHandle;
@@ -6,12 +7,17 @@ use crate::storage;
 
 use super::price;
 
+fn kst_now() -> chrono::DateTime<FixedOffset> {
+    Utc::now().with_timezone(&FixedOffset::east_opt(9 * 3600).unwrap())
+}
+
 /// 특정 사용자의 활성 시그널을 순회하며 조건 평가. 발동 시 텔레그램 알림 전송.
 pub async fn check_all_signals(api: &ApiHandle, bot: &Bot, user_id: i64) {
     let chat_id = ChatId(user_id);
-    let portfolio = storage::load_portfolio(user_id);
+    let mut portfolio = storage::load_portfolio(user_id);
     let mut signal_store = storage::load_signals(user_id);
     let mut any_triggered = false;
+    let mut portfolio_updated = false;
 
     let active_indices: Vec<usize> = signal_store
         .signals
@@ -22,16 +28,14 @@ pub async fn check_all_signals(api: &ApiHandle, bot: &Bot, user_id: i64) {
         .collect();
 
     for idx in active_indices {
-        let signal = &signal_store.signals[idx];
-        let symbol = &signal.symbol;
+        let symbol = signal_store.signals[idx].symbol.clone();
 
-        let holding = portfolio.holdings.iter().find(|h| h.symbol == *symbol);
-        let market = match holding {
-            Some(h) => h.market,
+        let (market, avg_price) = match portfolio.holdings.iter().find(|h| h.symbol == symbol) {
+            Some(h) => (h.market, h.avg_price),
             None => continue,
         };
 
-        let price_data = match api.get_price_for_market(market, symbol).await {
+        let price_data = match api.get_price_for_market(market, &symbol).await {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!("Signal check: failed to get price for {symbol}: {e}");
@@ -39,27 +43,37 @@ pub async fn check_all_signals(api: &ApiHandle, bot: &Bot, user_id: i64) {
             }
         };
 
-        let avg_price = holding.map(|h| h.avg_price);
-        let triggered = price::evaluate(&signal.condition, price_data.current_price, avg_price);
+        // 캐시 갱신
+        if let Some(h) = portfolio.holdings.iter_mut().find(|h| h.symbol == symbol) {
+            h.cached_price = Some(price_data.current_price);
+            h.cached_at = Some(kst_now());
+            portfolio_updated = true;
+        }
+
+        let triggered = price::evaluate(
+            &signal_store.signals[idx].condition,
+            price_data.current_price,
+            Some(avg_price),
+        );
 
         if triggered {
             any_triggered = true;
-            let condition_desc = signal.condition.display_description();
+            let condition_desc = signal_store.signals[idx].condition.display_description();
             let alert_msg = formatter::format_signal_alert(
-                symbol,
+                &symbol,
                 &price_data.name,
                 &condition_desc,
                 price_data.current_price,
                 price_data.change_pct,
-                avg_price,
+                Some(avg_price),
             );
 
             match bot.send_message(chat_id, &alert_msg).await {
                 Ok(_) => {
-                    tracing::info!("Signal triggered: {} {} (user {})", signal.id, condition_desc, user_id);
+                    tracing::info!("Signal triggered: {} {} (user {})", signal_store.signals[idx].id, condition_desc, user_id);
                 }
                 Err(e) => {
-                    tracing::error!("Failed to send alert for {} (user {}): {e}", signal.id, user_id);
+                    tracing::error!("Failed to send alert for {} (user {}): {e}", signal_store.signals[idx].id, user_id);
                 }
             }
 
@@ -70,6 +84,12 @@ pub async fn check_all_signals(api: &ApiHandle, bot: &Bot, user_id: i64) {
     if any_triggered {
         if let Err(e) = storage::save_signals(user_id, &signal_store) {
             tracing::error!("Failed to save signals after trigger (user {}): {e}", user_id);
+        }
+    }
+
+    if portfolio_updated {
+        if let Err(e) = storage::save_portfolio(user_id, &portfolio) {
+            tracing::warn!("Failed to save portfolio cache after signal check (user {}): {e}", user_id);
         }
     }
 }

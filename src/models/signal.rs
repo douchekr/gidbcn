@@ -46,27 +46,9 @@ pub struct Signal {
     pub created_at: DateTime<FixedOffset>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SignalStore {
-    pub next_id: u64,
     pub signals: Vec<Signal>,
-}
-
-impl Default for SignalStore {
-    fn default() -> Self {
-        Self {
-            next_id: 1,
-            signals: Vec::new(),
-        }
-    }
-}
-
-impl SignalStore {
-    pub fn next_signal_id(&mut self) -> String {
-        let id = format!("s_{:03}", self.next_id);
-        self.next_id += 1;
-        id
-    }
 }
 
 #[cfg(test)]
@@ -98,9 +80,8 @@ mod tests {
     }
 
     #[test]
-    fn next_signal_id_increments() {
-        let mut store = SignalStore::default();
-        assert_eq!(store.next_signal_id(), "s_001");
-        assert_eq!(store.next_signal_id(), "s_002");
+    fn signal_store_default_empty() {
+        let store = SignalStore::default();
+        assert!(store.signals.is_empty());
     }
 }
