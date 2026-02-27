@@ -176,7 +176,9 @@ custtype: P
 #### 0. 토큰 발급
 - POST `/oauth2/tokenP`
 - Body: `{ "grant_type": "client_credentials", "appkey": "...", "appsecret": "..." }`
-- 응답: `access_token`, `expires_in` (86400초)
+- 응답: `access_token`, `access_token_token_expired` ("YYYY-MM-DD HH:MM:SS" KST 형식)
+- **주의**: `expires_in` 필드 없음. 만료시간은 `access_token_token_expired` 파싱. 파싱 실패 시 발급 시각 +24h로 fallback
+- 갱신 조건: `expires_at - 1시간` 이전이면 자동 갱신 (`token_needs_refresh()`)
 
 #### 1. 국내주식 현재가
 - GET `/uapi/domestic-stock/v1/quotations/inquire-price`
@@ -189,8 +191,8 @@ custtype: P
 - GET `/uapi/overseas-price/v1/quotations/price-detail`
 - tr_id: `HHDFS76200200`
 - Query: `AUTH=""`, `EXCD={NAS|NYS|AMS}`, `SYMB={티커}`
-- 응답: `last`(현재가), `t_xrat`(원환산당일등락률%), `t_rate`(당일환율)
-- `rate`·`name` 필드 없음. 등락률은 `t_xrat` 사용
+- 응답 (`output`) 주요 필드: `last`(현재가), `name`(종목명), `t_xrat`(원환산당일등락률%), `t_rate`(당일환율)
+- **`rate` 필드 없음**. 등락률은 `t_xrat` 사용 (`name`은 존재하며 실제로 읽음)
 - **`t_rate` 부산물 캐싱**: 해외주식 시세 조회마다 actor가 config.json `exchange_rate`에 자동 저장
 - **환율 전용 호출** (`exchange.rs`): 스케줄러(08:50/15:40)가 AAPL로 동일 엔드포인트 호출해 환율만 갱신
 
