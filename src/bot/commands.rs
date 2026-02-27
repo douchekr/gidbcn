@@ -103,7 +103,7 @@ fn kst_now() -> chrono::DateTime<FixedOffset> {
 fn help_text() -> String {
     "📋 명령어 목록\n\n\
      포트폴리오:\n\
-     /port add [마켓] [종목코드] [수량] [매입가] [종목명] [@계좌]\n\
+     /port add [마켓] [종목코드] [수량] [매입가] [@계좌]\n\
      /port remove [종목코드|*] [@계좌]\n\
      /port edit [종목코드] [수량] [매입가] [@계좌]\n\
      /port list [@계좌] — 전체 포트폴리오 (계좌 필터)\n\
@@ -161,7 +161,8 @@ fn account_tag(account: &str) -> String {
 
 async fn cmd_port(user_id: i64, args: &str, api: &ApiHandle) -> String {
     let parts: Vec<&str> = args.split_whitespace().collect();
-    let rest = parts.get(1..).unwrap_or(&[]).join(" ");
+    // 서브커맨드 이후 인자: 종목코드 등 대문자 정규화 (한글/숫자는 영향 없음)
+    let rest = parts.get(1..).unwrap_or(&[]).join(" ").to_uppercase();
     match parts.first().copied() {
         Some("add")     => cmd_add(user_id, &rest, api).await,
         Some("remove")  => cmd_remove(user_id, &rest),
@@ -170,7 +171,7 @@ async fn cmd_port(user_id: i64, args: &str, api: &ApiHandle) -> String {
         Some("info")    => cmd_info(user_id, &rest, api).await,
         Some("summary") => cmd_summary(user_id, api).await,
         _ => "사용법:\n\
-              /port add [마켓] [종목코드] [수량] [매입가] [종목명] [@계좌]\n\
+              /port add [마켓] [종목코드] [수량] [매입가] [@계좌]\n\
               /port remove [종목코드|*] [@계좌]\n\
               /port edit [종목코드] [수량] [매입가] [@계좌]\n\
               /port list [@계좌]\n\
@@ -184,7 +185,7 @@ async fn cmd_add(user_id: i64, args: &str, api: &ApiHandle) -> String {
     let raw: Vec<&str> = args.split_whitespace().collect();
     let (parts, account) = extract_account(&raw);
     if parts.len() < 4 {
-        return "사용법: /port add [마켓] [종목코드] [수량] [매입가] [종목명] [@계좌]\n예: /port add KRX 005930 10 70000 삼성전자 @IRP".to_string();
+        return "사용법: /port add [마켓] [종목코드] [수량] [매입가] [@계좌]\n예: /port add KRX 005930 10 70000 @IRP".to_string();
     }
 
     let market = match Market::from_str(parts[0]) {
@@ -201,21 +202,11 @@ async fn cmd_add(user_id: i64, args: &str, api: &ApiHandle) -> String {
         Err(_) => return "매입가는 숫자여야 합니다.".to_string(),
     };
 
-    // 종목명: 사용자 입력 우선, 없으면 API 자동 조회
-    let name = if parts.len() > 4 {
-        parts[4..].join(" ")
-    } else {
-        match api.get_stock_name(market, &symbol).await {
-            Ok(n) if !n.is_empty() => n,
-            Ok(_) => {
-                tracing::warn!("Empty stock name from API for {symbol}");
-                String::new()
-            }
-            Err(e) => {
-                tracing::warn!("Failed to fetch stock name for {symbol}: {e:#}");
-                String::new()
-            }
-        }
+    // 종목명 API 조회 (실패 시 존재하지 않는 종목으로 판단)
+    let name = match api.get_stock_name(market, &symbol).await {
+        Ok(n) if !n.is_empty() => n,
+        Ok(_) => return format!("종목을 찾을 수 없습니다: {symbol}"),
+        Err(e) => return format!("종목 조회 실패: {symbol} ({e:#})"),
     };
 
     let mut store = storage::load_portfolio(user_id);
@@ -559,7 +550,7 @@ async fn cmd_info(user_id: i64, args: &str, api: &ApiHandle) -> String {
 
     let signal_store = storage::load_signals(user_id);
     let market = store.holdings[indices[0]].market;
-    let price_result = api.get_price_for_market(market, symbol).await;
+    let price_result = api.get_price_for_market(market, &symbol).await;
 
     let usd_krw = if matches!(market, Market::NAS | Market::NYS | Market::AMS) {
         api.get_exchange_rate().await.unwrap_or(1350.0)
@@ -745,14 +736,16 @@ async fn cmd_summary(user_id: i64, api: &ApiHandle) -> String {
 
 fn cmd_signal(user_id: i64, args: &str) -> String {
     let parts: Vec<&str> = args.split_whitespace().collect();
+    // 서브커맨드 이후 인자: 종목코드 등 대문자 정규화
+    let rest = parts.get(1..).unwrap_or(&[]).join(" ").to_uppercase();
     match parts.first().copied() {
         Some("list") => cmd_signal_list(user_id),
-        Some("remove") => cmd_signal_remove(user_id, &parts[1..].join(" ")),
-        Some("clear") => cmd_signal_clear(user_id, &parts[1..].join(" ")),
+        Some("remove") => cmd_signal_remove(user_id, &rest),
+        Some("clear") => cmd_signal_clear(user_id, &rest),
         Some("purge") => cmd_signal_purge(user_id),
         Some("add") => {
-            // parts[1..] 에서 @계좌 추출
-            let (sig_parts, account) = extract_account(&parts[1..]);
+            let rest_parts: Vec<&str> = rest.split_whitespace().collect();
+            let (sig_parts, account) = extract_account(&rest_parts);
             if sig_parts.len() < 3 {
                 return "사용법: /signal add [종목코드] [> 또는 <] [값 또는 수익률%] [@계좌]\n\
                         예: /signal add 005930 > 80000\n\
