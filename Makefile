@@ -1,8 +1,8 @@
 TARGET   := armv7-unknown-linux-gnueabihf
 BINARY   := gidbcn
 # 배포 대상 (환경변수로 덮어쓰기 가능: make deploy PI_HOST=pi@192.168.0.x)
-PI_HOST  ?= pi@raspberrypi
-PI_PATH  ?= /home/pi/$(BINARY)
+PI_HOST  ?= pi@raspberrypi.local
+PI_PATH  ?= /opt/kkuepark/gidbcn/$(BINARY)
 
 .PHONY: build test build-pi deploy setup-cross
 
