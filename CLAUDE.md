@@ -101,7 +101,7 @@ gidbcn/
     │   └── stock_info.rs  ← 종목명 조회 (상품기본조회 CTPF1604R)
     ├── bot/
     │   ├── mod.rs
-    │   ├── handler.rs     ← teloxide 디스패처 설정
+    │   ├── handler.rs     ← teloxide 디스패처 설정 (비커맨드 메시지 default_handler로 무시)
     │   ├── commands.rs    ← /port, /signal 서브커맨드
     │   └── formatter.rs   ← 텔레그램 메시지 포맷
     ├── signal/
@@ -446,6 +446,9 @@ uuid = { version = "1", features = ["v4"] }
 6. **API 응답 필드**: 한투 API는 모든 숫자를 String으로 반환 → 파싱 필요.
 7. **TLS**: rustls 사용 (크로스 컴파일 용이). OpenSSL 의존 금지.
 8. **rate limiting**: API Actor 내부에서 `tokio::time::sleep`으로 초당 20회 제한 준수.
+9. **입력 정규화**: 종목코드·마켓코드 대문자 변환은 `cmd_port`/`cmd_signal` 진입점에서 `rest.to_uppercase()` 1회 적용. 개별 서브커맨드에서 중복 변환 금지.
+10. **종목명**: `/port add` 시 API 자동 조회 전용 (수동 입력 불가). 조회 실패 = 추가 거부.
+11. **비커맨드 메시지**: `Dispatcher::default_handler(|_| async {})` — 슬래시 없는 일반 메시지는 디스패처 레벨에서 무시.
 
 ---
 
