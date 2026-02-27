@@ -45,6 +45,26 @@ impl ActorContext {
         self.last_request = std::time::Instant::now();
     }
 
+    /// keep-alive 연결이 서버 측에서 종료된 경우 1회 재시도.
+    /// 타임아웃은 재시도하지 않음.
+    pub async fn send_with_retry(
+        &self,
+        builder: reqwest::RequestBuilder,
+    ) -> reqwest::Result<reqwest::Response> {
+        let retry = builder.try_clone();
+        match builder.send().await {
+            Ok(resp) => Ok(resp),
+            Err(e) if !e.is_timeout() && (e.is_request() || e.is_connect()) => {
+                tracing::debug!("Stale connection, retrying once: {e}");
+                match retry {
+                    Some(b) => b.send().await,
+                    None => Err(e),
+                }
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// 공통 헤더 생성
     pub fn common_headers(&self, tr_id: &str) -> Result<HeaderMap> {
         let token = self

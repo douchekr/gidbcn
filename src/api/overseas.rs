@@ -12,20 +12,17 @@ pub async fn get_price(ctx: &ActorContext, exchange: &str, symbol: &str) -> Resu
         ctx.config.base_url
     );
 
-    let status;
-    let body;
-    {
-        let http_resp = ctx
-            .client
-            .get(&url)
-            .headers(ctx.common_headers("HHDFS76200200")?)
-            .query(&[("AUTH", ""), ("EXCD", exchange), ("SYMB", symbol)])
-            .send()
-            .await
-            .context("Overseas price request failed")?;
-        status = http_resp.status();
-        body = http_resp.text().await.context("Overseas price body read failed")?;
-    }
+    let http_resp = ctx
+        .send_with_retry(
+            ctx.client
+                .get(&url)
+                .headers(ctx.common_headers("HHDFS76200200")?)
+                .query(&[("AUTH", ""), ("EXCD", exchange), ("SYMB", symbol)]),
+        )
+        .await
+        .context("Overseas price request failed")?;
+    let status = http_resp.status();
+    let body = http_resp.text().await.context("Overseas price body read failed")?;
 
     let resp: serde_json::Value = serde_json::from_str(&body).with_context(|| {
         format!("Overseas price parse failed (HTTP {status}): {body}")

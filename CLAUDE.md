@@ -165,7 +165,13 @@ async fn main() {
 |---|---|---|
 | `connect_timeout` | 5s | TCP+TLS 연결 수립 타임아웃 |
 | `timeout` | 15s | 전체 요청(연결~응답 수신) 타임아웃 |
-| `pool_idle_timeout` | 55s | KIS API 서버는 idle connection을 ~60s 후 서버 측에서 종료함. 이보다 짧게 설정하여 stale connection 재사용 방지 ("connection closed before message completed" 오류 원인) |
+| `pool_idle_timeout` | 55s | 1차 방어: KIS API 서버 idle timeout보다 짧게 설정하여 stale connection 사전 제거 |
+
+#### stale connection 재시도 (`ActorContext::send_with_retry`)
+HTTP keep-alive 연결을 서버가 종료한 뒤 클라이언트가 재사용 시도 시 "connection closed before message completed" 발생. `pool_idle_timeout`만으로는 타이밍 race condition을 완전히 막을 수 없으므로 모든 API 함수는 `ctx.send_with_retry(builder)` 사용.
+- 연결 오류(`is_request` / `is_connect`)에 한해 1회 재시도
+- 타임아웃(`is_timeout`)은 재시도하지 않음 (대기 시간 2배 방지)
+- 재시도 시 `DEBUG` 레벨 로그 출력
 
 ### 공통 헤더
 ```

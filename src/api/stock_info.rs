@@ -10,20 +10,18 @@ pub async fn get_stock_name(ctx: &ActorContext, prdt_type_cd: &str, pdno: &str) 
         ctx.config.base_url
     );
 
-    let resp: serde_json::Value = ctx
-        .client
-        .get(&url)
-        .headers(ctx.common_headers("CTPF1604R")?)
-        .query(&[
-            ("PRDT_TYPE_CD", prdt_type_cd),
-            ("PDNO", pdno),
-        ])
-        .send()
+    let http_resp = ctx
+        .send_with_retry(
+            ctx.client
+                .get(&url)
+                .headers(ctx.common_headers("CTPF1604R")?)
+                .query(&[("PRDT_TYPE_CD", prdt_type_cd), ("PDNO", pdno)]),
+        )
         .await
-        .context("Stock info request failed")?
-        .json()
-        .await
-        .context("Stock info parse failed")?;
+        .context("Stock info request failed")?;
+    let body = http_resp.text().await.context("Stock info body read failed")?;
+    let resp: serde_json::Value =
+        serde_json::from_str(&body).context("Stock info parse failed")?;
 
     let name = resp["output"]["prdt_abrv_name"]
         .as_str()

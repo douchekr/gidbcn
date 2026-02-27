@@ -14,14 +14,12 @@ pub async fn get_price(ctx: &ActorContext, symbol: &str) -> Result<PriceData> {
     );
 
     let http_resp = ctx
-        .client
-        .get(&url)
-        .headers(ctx.common_headers("FHKST01010100")?)
-        .query(&[
-            ("FID_COND_MRKT_DIV_CODE", "J"),
-            ("FID_INPUT_ISCD", symbol),
-        ])
-        .send()
+        .send_with_retry(
+            ctx.client
+                .get(&url)
+                .headers(ctx.common_headers("FHKST01010100")?)
+                .query(&[("FID_COND_MRKT_DIV_CODE", "J"), ("FID_INPUT_ISCD", symbol)]),
+        )
         .await
         .context("Domestic price request failed")?;
 

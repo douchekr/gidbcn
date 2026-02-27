@@ -11,11 +11,12 @@ pub async fn get_usd_krw(ctx: &ActorContext) -> Result<f64> {
     );
 
     let http_resp = ctx
-        .client
-        .get(&url)
-        .headers(ctx.common_headers("HHDFS76200200")?)
-        .query(&[("AUTH", ""), ("EXCD", "NAS"), ("SYMB", "AAPL")])
-        .send()
+        .send_with_retry(
+            ctx.client
+                .get(&url)
+                .headers(ctx.common_headers("HHDFS76200200")?)
+                .query(&[("AUTH", ""), ("EXCD", "NAS"), ("SYMB", "AAPL")]),
+        )
         .await
         .context("Exchange rate request failed")?;
 

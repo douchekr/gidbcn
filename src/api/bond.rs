@@ -11,14 +11,12 @@ pub async fn get_price(ctx: &ActorContext, isin: &str) -> Result<BondData> {
     );
 
     let http_resp = ctx
-        .client
-        .get(&url)
-        .headers(ctx.common_headers("FHKBJ773400C0")?)
-        .query(&[
-            ("FID_COND_MRKT_DIV_CODE", "B"),
-            ("FID_INPUT_ISCD", isin),
-        ])
-        .send()
+        .send_with_retry(
+            ctx.client
+                .get(&url)
+                .headers(ctx.common_headers("FHKBJ773400C0")?)
+                .query(&[("FID_COND_MRKT_DIV_CODE", "B"), ("FID_INPUT_ISCD", isin)]),
+        )
         .await
         .context("Bond price request failed")?;
 
