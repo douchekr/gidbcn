@@ -66,20 +66,25 @@ fn display_name(h: &Holding) -> &str {
     if h.name.is_empty() { "-" } else { &h.name }
 }
 
+fn acct_tag(account: &str) -> String {
+    if account.is_empty() { String::new() } else { format!(" [@{account}]") }
+}
+
 pub fn format_holding_line_no_price(h: &Holding) -> String {
     let name = display_name(h);
+    let acct = acct_tag(&h.account);
     match h.market {
         Market::KRX => format!(
-            "• {} {} | {} | 매입 {} | 현재가: -",
-            h.symbol, name, fmt_qty(h), fmt_price_krx(h.avg_price)
+            "• {} {}{} | {} | 매입 {} | 현재가: -",
+            h.symbol, name, acct, fmt_qty(h), fmt_price_krx(h.avg_price)
         ),
         Market::NAS | Market::NYS | Market::AMS => format!(
-            "• {} {} | {} | 매입 {} | 현재가: -",
-            h.symbol, name, fmt_qty(h), fmt_price_us(h.avg_price)
+            "• {} {}{} | {} | 매입 {} | 현재가: -",
+            h.symbol, name, acct, fmt_qty(h), fmt_price_us(h.avg_price)
         ),
         Market::BOND => format!(
-            "• {} {} | {} | 매입 {} | 현재가: -",
-            h.symbol, name, fmt_qty(h), fmt_price_bond(h.avg_price)
+            "• {} {}{} | {} | 매입 {} | 현재가: -",
+            h.symbol, name, acct, fmt_qty(h), fmt_price_bond(h.avg_price)
         ),
     }
 }
@@ -96,21 +101,22 @@ pub fn format_holding_line(h: &Holding, price: &PriceData, _usd_krw: f64) -> Str
     } else {
         display_name(h)
     };
+    let acct = acct_tag(&h.account);
 
     match h.market {
         Market::KRX => format!(
-            "• {} {} | {} | {}→{} | {sign}{:.1}%",
-            h.symbol, name, fmt_qty(h),
+            "• {} {}{} | {} | {}→{} | {sign}{:.1}%",
+            h.symbol, name, acct, fmt_qty(h),
             fmt_price_krx(h.avg_price), fmt_price_krx(price.current_price), pnl_pct
         ),
         Market::NAS | Market::NYS | Market::AMS => format!(
-            "• {} {} | {} | {}→{} | {sign}{:.1}%",
-            h.symbol, name, fmt_qty(h),
+            "• {} {}{} | {} | {}→{} | {sign}{:.1}%",
+            h.symbol, name, acct, fmt_qty(h),
             fmt_price_us(h.avg_price), fmt_price_us(price.current_price), pnl_pct
         ),
         Market::BOND => format!(
-            "• {} {} | {} | {}→{} | {sign}{:.1}%",
-            h.symbol, name, fmt_qty(h),
+            "• {} {}{} | {} | {}→{} | {sign}{:.1}%",
+            h.symbol, name, acct, fmt_qty(h),
             fmt_price_bond(h.avg_price), fmt_price_bond(price.current_price), pnl_pct
         ),
     }
@@ -138,25 +144,26 @@ pub fn format_info(h: &Holding, price: &PriceData, signals: &[&Signal]) -> Strin
     } else {
         display_name(h)
     };
+    let acct = acct_tag(&h.account);
 
     let mut msg = match h.market {
         Market::KRX => format!(
-            "📈 {} {}\n현재가: {}원 (전일 대비 {sign}{:.1}%)\n매입가: {} × {}\n평가금액: {}원\n손익: {pnl_sign}{}원 ({pnl_sign}{:.1}%)",
-            h.symbol, name,
+            "📈 {} {}{}\n현재가: {}원 (전일 대비 {sign}{:.1}%)\n매입가: {} × {}\n평가금액: {}원\n손익: {pnl_sign}{}원 ({pnl_sign}{:.1}%)",
+            h.symbol, name, acct,
             fmt_price_krx(price.current_price), price.change_pct,
             fmt_price_krx(h.avg_price), fmt_qty(h),
             fmt_int(eval), fmt_int(pnl), pnl_pct,
         ),
         Market::NAS | Market::NYS | Market::AMS => format!(
-            "📈 {} {}\n현재가: {} (전일 대비 {sign}{:.1}%)\n매입가: {} × {}\n평가금액: {}\n손익: {pnl_sign}{} ({pnl_sign}{:.1}%)",
-            h.symbol, name,
+            "📈 {} {}{}\n현재가: {} (전일 대비 {sign}{:.1}%)\n매입가: {} × {}\n평가금액: {}\n손익: {pnl_sign}{} ({pnl_sign}{:.1}%)",
+            h.symbol, name, acct,
             fmt_price_us(price.current_price), price.change_pct,
             fmt_price_us(h.avg_price), fmt_qty(h),
             fmt_price_us(eval), fmt_price_us(pnl), pnl_pct,
         ),
         Market::BOND => format!(
-            "📈 {} {}\n현재가: {}원 (전일 대비 {sign}{:.1}%)\n매입가: {} × {}\n평가금액: {}원\n손익: {pnl_sign}{}원 ({pnl_sign}{:.1}%)",
-            h.symbol, name,
+            "📈 {} {}{}\n현재가: {}원 (전일 대비 {sign}{:.1}%)\n매입가: {} × {}\n평가금액: {}원\n손익: {pnl_sign}{}원 ({pnl_sign}{:.1}%)",
+            h.symbol, name, acct,
             fmt_price_bond(price.current_price), price.change_pct,
             fmt_price_bond(h.avg_price), fmt_qty(h),
             fmt_int(eval), fmt_int(pnl), pnl_pct,
@@ -176,17 +183,19 @@ pub fn format_info(h: &Holding, price: &PriceData, signals: &[&Signal]) -> Strin
 pub fn format_signal_alert(
     symbol: &str,
     name: &str,
+    account: &str,
     condition_desc: &str,
     current_price: f64,
     change_pct: f64,
     avg_price: Option<f64>,
 ) -> String {
     let sign = if change_pct >= 0.0 { "+" } else { "" };
-    let display_name = if name.is_empty() { symbol } else { name };
+    let name_part = if name.is_empty() { String::new() } else { format!(" {name}") };
+    let acct = acct_tag(account);
 
     let mut msg = format!(
-        "🚨 시그널 발동!\n{} {}\n조건: {}\n현재가: {} ({sign}{:.1}%)",
-        symbol, display_name, condition_desc, fmt_int(current_price), change_pct,
+        "🚨 시그널 발동!\n{}{}{}\n조건: {}\n현재가: {} ({sign}{:.1}%)",
+        symbol, name_part, acct, condition_desc, fmt_int(current_price), change_pct,
     );
 
     if let Some(avg) = avg_price {
@@ -215,6 +224,7 @@ mod tests {
             market,
             symbol: symbol.into(),
             name: String::new(),
+            account: String::new(),
             quantity: qty,
             avg_price: avg,
             added_at: Utc::now().with_timezone(&FixedOffset::east_opt(9 * 3600).unwrap()),
@@ -303,7 +313,7 @@ mod tests {
 
     #[test]
     fn format_alert_with_avg_price() {
-        let msg = format_signal_alert("005930", "삼성전자", "가격 ≥ 80,000", 80500.0, 1.2, Some(70000.0));
+        let msg = format_signal_alert("005930", "삼성전자", "", "가격 ≥ 80,000", 80500.0, 1.2, Some(70000.0));
         assert!(msg.contains("시그널 발동"));
         assert!(msg.contains("삼성전자"));
         assert!(msg.contains("80,500"));
@@ -313,7 +323,7 @@ mod tests {
 
     #[test]
     fn format_alert_without_avg_price() {
-        let msg = format_signal_alert("TSLA", "", "가격 ≥ 200", 205.0, 3.0, None);
+        let msg = format_signal_alert("TSLA", "", "", "가격 ≥ 200", 205.0, 3.0, None);
         assert!(msg.contains("TSLA"));
         assert!(!msg.contains("매입가"));
     }

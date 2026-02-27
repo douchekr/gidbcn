@@ -41,6 +41,8 @@ impl Condition {
 pub struct Signal {
     pub id: String,
     pub symbol: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub account: String,
     pub condition: Condition,
     pub active: bool,
     pub created_at: DateTime<FixedOffset>,

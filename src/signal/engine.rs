@@ -29,8 +29,12 @@ pub async fn check_all_signals(api: &ApiHandle, bot: &Bot, user_id: i64) {
 
     for idx in active_indices {
         let symbol = signal_store.signals[idx].symbol.clone();
+        let sig_account = signal_store.signals[idx].account.clone();
 
-        let (market, avg_price) = match portfolio.holdings.iter().find(|h| h.symbol == symbol) {
+        // account 지정 시 정확히 매칭, 미지정 시 첫 번째 매칭 holding 사용
+        let (market, avg_price) = match portfolio.holdings.iter().find(|h| {
+            h.symbol == symbol && (sig_account.is_empty() || h.account == sig_account)
+        }) {
             Some(h) => (h.market, h.avg_price),
             None => continue,
         };
@@ -49,7 +53,9 @@ pub async fn check_all_signals(api: &ApiHandle, bot: &Bot, user_id: i64) {
         };
 
         // 캐시 갱신
-        if let Some(h) = portfolio.holdings.iter_mut().find(|h| h.symbol == symbol) {
+        if let Some(h) = portfolio.holdings.iter_mut().find(|h| {
+            h.symbol == symbol && (sig_account.is_empty() || h.account == sig_account)
+        }) {
             h.cached_price = Some(price_data.current_price);
             h.cached_at = Some(kst_now());
             portfolio_updated = true;
@@ -66,6 +72,7 @@ pub async fn check_all_signals(api: &ApiHandle, bot: &Bot, user_id: i64) {
             let alert_msg = formatter::format_signal_alert(
                 &symbol,
                 &price_data.name,
+                &sig_account,
                 &condition_desc,
                 price_data.current_price,
                 price_data.change_pct,

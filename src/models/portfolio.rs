@@ -84,6 +84,8 @@ pub struct Holding {
     pub symbol: String,
     #[serde(default)]
     pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub account: String,
     pub quantity: f64,
     pub avg_price: f64,
     pub added_at: DateTime<FixedOffset>,
@@ -126,6 +128,7 @@ mod tests {
                 market: Market::KRX,
                 symbol: "005930".into(),
                 name: "삼성전자".into(),
+                account: String::new(),
                 quantity: 10.0,
                 avg_price: 70000.0,
                 added_at: chrono::Utc::now()
