@@ -93,9 +93,12 @@ async fn main() {
         .expect("로그 디렉토리 초기화 실패");
     let (non_blocking, _log_guard) = tracing_appender::non_blocking(file_appender);
 
-    use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*};
+    use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
+    // RUST_LOG 없으면 stdout은 INFO 기본값
+    let stdout_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::registry()
-        .with(fmt::layer().with_filter(tracing_subscriber::EnvFilter::from_default_env()))
+        .with(fmt::layer().with_filter(stdout_filter))
         .with(fmt::layer().with_writer(non_blocking).with_filter(LevelFilter::WARN))
         .init();
     tracing::info!("gidbcn starting... (log dir: {}, retain: {}d)", config.log.dir, config.log.retain_days);
