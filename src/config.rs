@@ -8,6 +8,8 @@ pub struct Config {
     pub telegram: TelegramConfig,
     #[serde(default)]
     pub scheduler: SchedulerConfig,
+    #[serde(default)]
+    pub log: LogConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,6 +49,23 @@ impl Default for SchedulerConfig {
     fn default() -> Self {
         Self {
             signal_check_interval_minutes: 5,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogConfig {
+    /// 로그 파일 저장 디렉토리
+    pub dir: String,
+    /// 보관할 최대 일수 (일별 롤링, 이 일수를 초과한 파일 자동 삭제)
+    pub retain_days: u32,
+}
+
+impl Default for LogConfig {
+    fn default() -> Self {
+        Self {
+            dir: "/opt/kkuepark/gidbcn".to_string(),
+            retain_days: 7,
         }
     }
 }

@@ -13,5 +13,9 @@
   },
   "scheduler": {
     "signal_check_interval_minutes": 5
+  },
+  "log": {
+    "dir": "/opt/kkuepark/gidbcn",
+    "retain_days": 7
   }
 }

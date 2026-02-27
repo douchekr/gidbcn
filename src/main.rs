@@ -14,10 +14,7 @@ use crate::models::messages::ApiRequest;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    tracing_subscriber::fmt::init();
-    tracing::info!("gidbcn starting...");
-
-    // 1. config 로드
+    // 1. config 로드 (로깅 초기화 전 — 오류는 eprintln 사용)
     let config_path = storage::CONFIG_PATH;
     let config = match config::Config::load(config_path) {
         Ok(c) => c,
@@ -49,7 +46,19 @@ async fn main() {
         }
     };
 
-    // 2. 필수 설정 검증
+    // 1-1. 새 섹션(log 등) 누락 시 defaults 포함해서 파일 업데이트
+    {
+        let raw = std::fs::read_to_string(config_path).unwrap_or_default();
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if v.get("log").is_none() {
+                if let Err(e) = config.save(config_path) {
+                    eprintln!("config.json 마이그레이션 저장 실패: {e:#}");
+                }
+            }
+        }
+    }
+
+    // 2. 필수 설정 검증 (로깅 초기화 전)
     {
         let mut missing: Vec<&str> = Vec::new();
         if config.telegram.bot_token.is_empty() || config.telegram.bot_token.starts_with("YOUR_") {
@@ -73,12 +82,30 @@ async fn main() {
         }
     }
 
-    // 3. API Actor 채널 생성 + spawn
+    // 3. 로깅 초기화 (config.log 기준)
+    // WARN/ERROR만 파일에 기록, stdout은 RUST_LOG 환경변수 기준
+    let file_appender = tracing_appender::rolling::Builder::new()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .max_log_files(config.log.retain_days as usize)
+        .filename_prefix("gidbcn")
+        .filename_suffix("log")
+        .build(&config.log.dir)
+        .expect("로그 디렉토리 초기화 실패");
+    let (non_blocking, _log_guard) = tracing_appender::non_blocking(file_appender);
+
+    use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*};
+    tracing_subscriber::registry()
+        .with(fmt::layer().with_filter(tracing_subscriber::EnvFilter::from_default_env()))
+        .with(fmt::layer().with_writer(non_blocking).with_filter(LevelFilter::WARN))
+        .init();
+    tracing::info!("gidbcn starting... (log dir: {}, retain: {}d)", config.log.dir, config.log.retain_days);
+
+    // 4. API Actor 채널 생성 + spawn
     let (api_tx, api_rx) = mpsc::channel::<ApiRequest>(32);
     let api_handle = ApiHandle::new(api_tx);
     tokio::spawn(run_api_actor(api_rx, config.clone()));
 
-    // 4. 텔레그램 봇 + 스케줄러 spawn
+    // 5. 텔레그램 봇 + 스케줄러 spawn
     let tg_bot = Bot::new(&config.telegram.bot_token);
 
     tokio::spawn(scheduler::run_scheduler(
@@ -89,6 +116,6 @@ async fn main() {
 
     tracing::info!("Bot and scheduler running");
 
-    // 5. 텔레그램 봇 실행 (메인 태스크, block)
+    // 6. 텔레그램 봇 실행 (메인 태스크, block)
     bot::run_bot(config.telegram, api_handle).await;
 }

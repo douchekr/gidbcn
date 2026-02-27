@@ -4,3 +4,4 @@
 .cargo/
 *.code-workspace
 data/config.json
+logs/

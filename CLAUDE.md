@@ -130,24 +130,29 @@ gidbcn/
 ```rust
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    tracing_subscriber::fmt::init();
-
-    // 1. config 로드 (없으면 템플릿 생성 후 종료 / 파싱 실패 시 오류 출력)
+    // 1. config 로드 (로깅 초기화 전 — 오류는 eprintln 사용)
+    //    없으면 템플릿 생성 후 종료 / 파싱 실패 시 오류 출력
     let config = Config::load(storage::CONFIG_PATH)?;
+
+    // 1-1. log 섹션 등 신규 섹션 누락 시 defaults 포함해서 자동 저장 (마이그레이션)
 
     // 2. 필수 설정 검증: bot_token, app_key, app_secret, hts_id 누락 시 종료
     //    (값이 비어있거나 "YOUR_"로 시작하면 미설정으로 판단)
 
-    // 3. API Actor 채널 생성 + spawn
+    // 3. 로깅 초기화 (config.log 기준)
+    //    - stdout: RUST_LOG 환경변수 기준
+    //    - 파일: config.log.dir/gidbcn.YYYY-MM-DD.log, WARN 이상만, config.log.retain_days일 보관
+
+    // 4. API Actor 채널 생성 + spawn
     let (api_tx, api_rx) = mpsc::channel::<ApiRequest>(32);
     let api_handle = ApiHandle::new(api_tx);
     tokio::spawn(run_api_actor(api_rx, config.clone()));
 
-    // 4. 스케줄러 spawn (bot 인스턴스 공유)
+    // 5. 스케줄러 spawn (bot 인스턴스 공유)
     let tg_bot = Bot::new(&config.telegram.bot_token);
     tokio::spawn(run_scheduler(api_handle.clone(), config.scheduler.clone(), tg_bot.clone()));
 
-    // 5. 텔레그램 봇 실행 (메인 태스크, block)
+    // 6. 텔레그램 봇 실행 (메인 태스크, block)
     run_bot(config.telegram, api_handle).await;
 }
 ```
@@ -259,10 +264,15 @@ custtype: P
   },
   "scheduler": {
     "signal_check_interval_minutes": 5
+  },
+  "log": {
+    "dir": "/opt/kkuepark/gidbcn",
+    "retain_days": 7
   }
 }
 ```
 - **환율 없음**: `usd_krw`는 config에 저장하지 않음. actor 시작 시 기본값 1350.0, 이후 해외주식 조회 시 t_rate로 자동 갱신.
+- **log 섹션 자동 마이그레이션**: 기존 config.json에 `log` 키가 없으면 시작 시 defaults 포함해서 자동 저장.
 
 ### portfolio.json
 ```json
@@ -406,7 +416,8 @@ serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 teloxide = { version = "0.13", default-features = false, features = ["macros", "rustls", "ctrlc_handler"] }
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 anyhow = "1"
 uuid = { version = "1", features = ["v4"] }
 ```
