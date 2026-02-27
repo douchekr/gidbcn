@@ -168,7 +168,7 @@ async fn cmd_add(user_id: i64, args: &str, api: &ApiHandle) -> String {
                 String::new()
             }
             Err(e) => {
-                tracing::warn!("Failed to fetch stock name for {symbol}: {e}");
+                tracing::warn!("Failed to fetch stock name for {symbol}: {e:#}");
                 String::new()
             }
         }
@@ -192,7 +192,7 @@ async fn cmd_add(user_id: i64, args: &str, api: &ApiHandle) -> String {
     });
 
     if let Err(e) = storage::save_portfolio(user_id, &store) {
-        return format!("저장 실패: {e}");
+        return format!("저장 실패: {e:#}");
     }
 
     let name_part = if name.is_empty() { String::new() } else { format!(" {name}") };
@@ -229,7 +229,7 @@ fn cmd_remove(user_id: i64, args: &str) -> String {
     }
 
     if let Err(e) = storage::save_portfolio(user_id, &store) {
-        return format!("저장 실패: {e}");
+        return format!("저장 실패: {e:#}");
     }
 
     // 관련 시그널 삭제 (같은 symbol + account 매칭)
@@ -243,7 +243,7 @@ fn cmd_remove(user_id: i64, args: &str) -> String {
     let sig_removed = sig_before - signal_store.signals.len();
     if sig_removed > 0 {
         if let Err(e) = storage::save_signals(user_id, &signal_store) {
-            tracing::warn!("Failed to save signals after port remove (user {}): {e}", user_id);
+            tracing::warn!("Failed to save signals after port remove (user {}): {e:#}", user_id);
         }
     }
 
@@ -297,7 +297,7 @@ fn cmd_edit(user_id: i64, args: &str) -> String {
     holding.avg_price = avg_price;
 
     if let Err(e) = storage::save_portfolio(user_id, &store) {
-        return format!("저장 실패: {e}");
+        return format!("저장 실패: {e:#}");
     }
 
     format!("✅ {symbol}{} 수정 완료 (수량: {quantity}, 매입가: {avg_price})", account_tag(&account))
@@ -355,7 +355,7 @@ async fn cmd_list(user_id: i64, api: &ApiHandle) -> String {
                 }
             }
             Err(e) => {
-                tracing::warn!("Failed to get price for {}: {e}", h.symbol);
+                tracing::warn!("Failed to get price for {}: {e:#}", h.symbol);
                 if let (Some(cp), Some(_)) = (h.cached_price, h.cached_at) {
                     // 캐시 가격 사용
                     let cached_price_data = PriceData {
@@ -399,7 +399,7 @@ async fn cmd_list(user_id: i64, api: &ApiHandle) -> String {
 
     if holdings_updated {
         if let Err(e) = storage::save_portfolio(user_id, &store) {
-            tracing::warn!("Failed to save portfolio: {e}");
+            tracing::warn!("Failed to save portfolio: {e:#}");
         }
     }
 
@@ -470,7 +470,7 @@ async fn cmd_info(user_id: i64, args: &str, api: &ApiHandle) -> String {
             store.holdings[idx].cached_at = Some(kst_now());
         }
         if let Err(e) = storage::save_portfolio(user_id, &store) {
-            tracing::warn!("Failed to save cache for {symbol}: {e}");
+            tracing::warn!("Failed to save cache for {symbol}: {e:#}");
         }
     }
 
@@ -485,7 +485,7 @@ async fn cmd_info(user_id: i64, args: &str, api: &ApiHandle) -> String {
         let part = match &price_result {
             Ok(price) => formatter::format_info(h, price, &signals),
             Err(e) => {
-                tracing::warn!("Failed to get price for {symbol}: {e}");
+                tracing::warn!("Failed to get price for {symbol}: {e:#}");
                 let display_name = if h.name.is_empty() { "-" } else { &h.name };
                 let price_str = if let Some(cp) = h.cached_price {
                     format!("{}⏱", formatter::fmt_price(&h.market, cp))
@@ -544,7 +544,7 @@ async fn cmd_summary(user_id: i64, api: &ApiHandle) -> String {
                 p.current_price
             }
             Err(e) => {
-                tracing::warn!("Summary: failed to get price for {symbol}: {e}");
+                tracing::warn!("Summary: failed to get price for {symbol}: {e:#}");
                 if let Some(cp) = h.cached_price {
                     has_cached = true;
                     cp
@@ -576,7 +576,7 @@ async fn cmd_summary(user_id: i64, api: &ApiHandle) -> String {
 
     if portfolio_updated {
         if let Err(e) = storage::save_portfolio(user_id, &store) {
-            tracing::warn!("Failed to save portfolio cache (summary): {e}");
+            tracing::warn!("Failed to save portfolio cache (summary): {e:#}");
         }
     }
 
@@ -679,7 +679,7 @@ fn cmd_signal(user_id: i64, args: &str) -> String {
                 created_at: kst_now(),
             });
             if let Err(e) = storage::save_signals(user_id, &store) {
-                return format!("저장 실패: {e}");
+                return format!("저장 실패: {e:#}");
             }
             format!("✅ 시그널 설정 완료\n{symbol}{}: {}", account_tag(&account), condition.display_description())
         }
@@ -761,7 +761,7 @@ fn cmd_signal_remove(user_id: i64, args: &str) -> String {
     }
 
     if let Err(e) = storage::save_signals(user_id, &store) {
-        return format!("저장 실패: {e}");
+        return format!("저장 실패: {e:#}");
     }
 
     removed_descs.reverse(); // 번호 오름차순으로 출력
@@ -792,7 +792,7 @@ fn cmd_signal_clear(user_id: i64, args: &str) -> String {
     }
 
     if let Err(e) = storage::save_signals(user_id, &store) {
-        return format!("저장 실패: {e}");
+        return format!("저장 실패: {e:#}");
     }
 
     format!("✅ {symbol}{} 시그널 {removed}개 삭제 완료", account_tag(&account))
@@ -809,7 +809,7 @@ fn cmd_signal_purge(user_id: i64) -> String {
     }
 
     if let Err(e) = storage::save_signals(user_id, &store) {
-        return format!("저장 실패: {e}");
+        return format!("저장 실패: {e:#}");
     }
 
     format!("✅ 비활성 시그널 {removed}개 삭제 완료")

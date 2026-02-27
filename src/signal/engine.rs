@@ -47,7 +47,7 @@ pub async fn check_all_signals(api: &ApiHandle, bot: &Bot, user_id: i64) {
         let price_data = match api.get_price_for_market(market, &symbol).await {
             Ok(p) => p,
             Err(e) => {
-                tracing::warn!("Signal check: failed to get price for {symbol}: {e}");
+                tracing::warn!("Signal check: failed to get price for {symbol}: {e:#}");
                 continue;
             }
         };
@@ -95,13 +95,13 @@ pub async fn check_all_signals(api: &ApiHandle, bot: &Bot, user_id: i64) {
 
     if any_triggered {
         if let Err(e) = storage::save_signals(user_id, &signal_store) {
-            tracing::error!("Failed to save signals after trigger (user {}): {e}", user_id);
+            tracing::error!("Failed to save signals after trigger (user {}): {e:#}", user_id);
         }
     }
 
     if portfolio_updated {
         if let Err(e) = storage::save_portfolio(user_id, &portfolio) {
-            tracing::warn!("Failed to save portfolio cache after signal check (user {}): {e}", user_id);
+            tracing::warn!("Failed to save portfolio cache after signal check (user {}): {e:#}", user_id);
         }
     }
 }

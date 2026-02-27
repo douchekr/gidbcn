@@ -21,8 +21,9 @@ impl ActorContext {
     fn new(config: KisApiConfig) -> Self {
         let client = reqwest::Client::builder()
             .use_rustls_tls()
-            .connect_timeout(std::time::Duration::from_secs(5))  // TCP+TLS 연결 수립
-            .timeout(std::time::Duration::from_secs(15))          // 전체 요청 (연결~응답 수신)
+            .connect_timeout(std::time::Duration::from_secs(5))   // TCP+TLS 연결 수립
+            .timeout(std::time::Duration::from_secs(15))           // 전체 요청 (연결~응답 수신)
+            .pool_idle_timeout(std::time::Duration::from_secs(55)) // stale connection 방지: 서버 idle timeout(~60s)보다 짧게
             .build()
             .expect("Failed to build HTTP client");
 
