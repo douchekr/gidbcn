@@ -120,10 +120,9 @@ gidbcn/
 ```
 
 **데이터 파일 경로** (레포 외부): `/opt/kkuepark/gidbcn/`
-- `config.json` — API 키, 토큰 (gitignore)
+- `config.json` — API 키, 토큰, 허용 사용자 목록 (gitignore)
 - `portfolio.json` — 전체 사용자 포트폴리오 (user_id 키 통합)
 - `signals.json` — 전체 사용자 시그널 (user_id 키 통합)
-- `users.json` — 허용된 사용자 chat_id 목록 (`[123456, 789012]`)
 
 ---
 
@@ -253,7 +252,8 @@ custtype: P
   },
   "telegram": {
     "bot_token": "123456789:ABCdef...",
-    "owner_chat_id": 123456789
+    "owner_chat_id": 123456789,
+    "users": [987654321]
   },
   "exchange_rate": {
     "usd_krw": 1450.20,
@@ -356,7 +356,7 @@ custtype: P
 | `/user list` | 허용된 사용자 목록 |
 
 - `config.json`의 `telegram.owner_chat_id`가 0이면 봇이 chat_id를 안내하고 모든 명령 차단
-- owner는 항상 허용. 추가 허용 유저 목록은 `users.json`에 저장
+- owner는 항상 허용. 추가 허용 유저 목록은 `config.json`의 `telegram.users`에 저장
 - 미허용 유저가 명령 시 `"접근 권한이 없습니다. (chat_id: xxx)"` 응답 → owner가 필요 시 추가 가능
 
 ### 시스템

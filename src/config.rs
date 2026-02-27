@@ -34,6 +34,9 @@ pub struct TelegramConfig {
     /// 봇 오너의 텔레그램 chat_id. 0이면 미설정 (봇이 chat_id 안내 후 차단).
     #[serde(default)]
     pub owner_chat_id: i64,
+    /// 봇 사용을 허용할 추가 chat_id 목록 (owner 제외)
+    #[serde(default)]
+    pub users: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

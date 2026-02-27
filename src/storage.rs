@@ -9,7 +9,6 @@ pub const DATA_DIR: &str = "/opt/kkuepark/gidbcn";
 pub const CONFIG_PATH: &str = "/opt/kkuepark/gidbcn/config.json";
 pub const PORTFOLIO_PATH: &str = "/opt/kkuepark/gidbcn/portfolio.json";
 pub const SIGNALS_PATH: &str = "/opt/kkuepark/gidbcn/signals.json";
-pub const USERS_PATH: &str = "/opt/kkuepark/gidbcn/users.json";
 
 type PortfolioDb = HashMap<String, PortfolioStore>;
 type SignalDb = HashMap<String, SignalStore>;
@@ -56,19 +55,20 @@ pub fn save_signals(user_id: i64, store: &SignalStore) -> Result<()> {
     save_db(SIGNALS_PATH, &db)
 }
 
-// --- 허용 사용자 ---
+// --- 허용 사용자 (config.json telegram.users) ---
 
 pub fn load_allowed_users() -> Vec<i64> {
-    match std::fs::read_to_string(USERS_PATH) {
-        Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
+    match crate::config::Config::load(CONFIG_PATH) {
+        Ok(config) => config.telegram.users,
         Err(_) => Vec::new(),
     }
 }
 
 pub fn save_allowed_users(users: &[i64]) -> Result<()> {
-    let json = serde_json::to_string_pretty(users)?;
-    std::fs::write(USERS_PATH, json).with_context(|| format!("Failed to write {USERS_PATH}"))?;
-    Ok(())
+    let mut config = crate::config::Config::load(CONFIG_PATH)
+        .with_context(|| "Failed to load config for user update")?;
+    config.telegram.users = users.to_vec();
+    config.save(CONFIG_PATH)
 }
 
 // --- 전체 사용자 목록 (스케줄러용) ---
