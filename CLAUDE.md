@@ -181,14 +181,16 @@ tr_id: {거래ID}
 - tr_id: `FHKST01010100`
 - Query: `FID_COND_MRKT_DIV_CODE=J`, `FID_INPUT_ISCD={종목코드6자리}`
 - 응답 (`output`): `stck_prpr`(현재가), `prdy_ctrt`(등락률)
-- **주의**: 종목명(`hts_kor_isnm`) 미포함 → 종목명은 `Holding.name`에 캐시 또는 `/port add` 시 직접 입력
-- 날짜 파라미터 없음 → 장 외 시간에도 안정적으로 동작 (자정 이후 새벽 시간대 포함)
+- 종목명 미포함 → `Holding.name` 사용. 날짜 파라미터 없음 → 장 외 시간도 정상 동작
 
-#### 2. 해외주식 현재가
-- GET `/uapi/overseas-price/v1/quotations/price`
-- tr_id: `HHDFS00000300`
+#### 2. 해외주식 현재가상세 (+ 환율)
+- GET `/uapi/overseas-price/v1/quotations/price-detail`
+- tr_id: `HHDFS76200200`
 - Query: `AUTH=""`, `EXCD={NAS|NYS|AMS}`, `SYMB={티커}`
-- 응답: `last`(현재가), `diff`(전일대비), `rate`(등락률), `tvol`(거래량), `name`(종목명)
+- 응답: `last`(현재가), `t_xrat`(원환산당일등락률%), `t_rate`(당일환율)
+- `rate`·`name` 필드 없음. 등락률은 `t_xrat` 사용
+- **`t_rate` 부산물 캐싱**: 해외주식 시세 조회마다 actor가 config.json `exchange_rate`에 자동 저장
+- **환율 전용 호출** (`exchange.rs`): 스케줄러(08:50/15:40)가 AAPL로 동일 엔드포인트 호출해 환율만 갱신
 
 #### 3. 국내채권 현재가
 - GET `/uapi/domestic-bond/v1/quotations/inquire-price`
@@ -199,20 +201,13 @@ tr_id: {거래ID}
 - **채권 수량 단위**: `quantity`는 액면가 1,000원 단위 수량 (예: 50,000 = 액면 5,000만원)
 - **평가금액 계산**: `price × quantity × 0.1` → `Market::value_factor()` = 0.1 적용
 
-#### 4. 환율 조회
-- GET `/uapi/overseas-stock/v1/quotations/inquire-exchange-rate`
-- tr_id: `CTRP6504R`
-- 응답: `output[]` 배열에서 `cur_cd == "USD"` 항목의 `bkpr`(매매기준율) 사용
-- **캐싱**: 조회 성공 시 항상 config.json `exchange_rate`에 저장 (API Actor 내부)
-- 실패 시 → config.json 캐시값 사용. 캐시 없으면 → Err (호출측에서 1350.0 폴백)
-
-#### 5. 종목명 조회 (상품기본조회)
+#### 4. 종목명 조회 (상품기본조회)
 - GET `/uapi/domestic-stock/v1/quotations/search-info`
 - tr_id: `CTPF1604R`
 - Query: `PRDT_TYPE_CD={코드}`, `PDNO={종목코드/ISIN}`
 - 응답 (`output`): `prdt_abrv_name`(표시용 약어명) 사용
 - `Market::product_type_code()`: KRX=300, NAS=512, NYS=513, AMS=529, BOND=302
-- 날짜 파라미터 없음. 전 마켓 단일 엔드포인트. `/port add` 시 종목명 미입력이면 자동 조회
+- **전 마켓 단일 엔드포인트**. `/port add` 시 종목명 미입력이면 자동 조회
 
 ---
 
