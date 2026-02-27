@@ -73,7 +73,8 @@ fn help_text() -> String {
      /signal add [종목코드] [> 또는 <] [값 또는 수익률%] [@계좌]\n\
      /signal list — 전체 시그널\n\
      /signal remove [번호]\n\
-     /signal clear [종목코드] [@계좌]\n\n\
+     /signal clear [종목코드] [@계좌]\n\
+     /signal purge — 비활성 시그널 전체 삭제\n\n\
      시스템:\n\
      /status — 시스템 상태\n\
      /ping — 핑\n\n\
@@ -642,6 +643,7 @@ fn cmd_signal(user_id: i64, args: &str) -> String {
         Some("list") => cmd_signal_list(user_id),
         Some("remove") => cmd_signal_remove(user_id, &parts[1..].join(" ")),
         Some("clear") => cmd_signal_clear(user_id, &parts[1..].join(" ")),
+        Some("purge") => cmd_signal_purge(user_id),
         Some("add") => {
             // parts[1..] 에서 @계좌 추출
             let (sig_parts, account) = extract_account(&parts[1..]);
@@ -686,6 +688,7 @@ fn cmd_signal(user_id: i64, args: &str) -> String {
               /signal list\n\
               /signal remove [번호]  ← 여러 개: /signal remove 1 2\n\
               /signal clear [종목코드] [@계좌]\n\
+              /signal purge  ← 비활성 시그널 전체 삭제\n\
               ⚠️ 삭제 시 목록 확인 후, 여러 개는 한 번에 입력하세요."
             .to_string(),
     }
@@ -793,6 +796,23 @@ fn cmd_signal_clear(user_id: i64, args: &str) -> String {
     }
 
     format!("✅ {symbol}{} 시그널 {removed}개 삭제 완료", account_tag(&account))
+}
+
+fn cmd_signal_purge(user_id: i64) -> String {
+    let mut store = storage::load_signals(user_id);
+    let before = store.signals.len();
+    store.signals.retain(|s| s.active);
+    let removed = before - store.signals.len();
+
+    if removed == 0 {
+        return "비활성 시그널이 없습니다.".to_string();
+    }
+
+    if let Err(e) = storage::save_signals(user_id, &store) {
+        return format!("저장 실패: {e}");
+    }
+
+    format!("✅ 비활성 시그널 {removed}개 삭제 완료")
 }
 
 fn cmd_status(user_id: i64) -> String {
