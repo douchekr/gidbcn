@@ -78,8 +78,16 @@ fn help_text() -> String {
      /status — 시스템 상태\n\
      /ping — 핑\n\n\
      마켓: KRX, NAS, NYS, AMS, BOND\n\
-     조건: > [가격], < [가격], > [수익률%], < [수익률%]\n\
-     계좌: @IRP, @일반 등 (동일 종목을 여러 계좌에 등록 시 사용)\n\n\
+     조건: > [가격], < [가격], > [수익률%], < [수익률%]\n\n\
+     📂 계좌 구분 (@계좌):\n\
+     동일 종목을 여러 계좌(IRP, 일반 등)에 나눠 보유할 때 사용.\n\
+     포트: /port add KRX 005930 10 70000 @IRP\n\
+     포트: /port add KRX 005930 5 72000 @일반\n\
+     시그널: /signal add 005930 > 80000 @IRP\n\
+     시그널: /signal add 005930 > 15% @일반\n\
+     • @계좌 미지정 시 — 종목이 1개 계좌에만 있으면 자동 적용\n\
+     • @계좌 미지정 시 — 여러 계좌에 있으면 계좌 지정 요청\n\
+     • 시그널 수익률 조건은 해당 계좌의 매입가 기준으로 계산\n\n\
      ※ BOND 수량/매입가 단위:\n\
        수량 = 액면가 1,000원 단위 (예: 50000 → 액면 5,000만원)\n\
        매입가 = 10,000원 액면 기준 가격 (예: 7435)"
@@ -223,7 +231,27 @@ fn cmd_remove(user_id: i64, args: &str) -> String {
         return format!("저장 실패: {e}");
     }
 
-    format!("✅ {symbol}{} 삭제 완료", account_tag(&account))
+    // 관련 시그널 삭제 (같은 symbol + account 매칭)
+    let mut signal_store = storage::load_signals(user_id);
+    let sig_before = signal_store.signals.len();
+    if account.is_empty() {
+        signal_store.signals.retain(|s| s.symbol != symbol);
+    } else {
+        signal_store.signals.retain(|s| !(s.symbol == symbol && s.account == account));
+    }
+    let sig_removed = sig_before - signal_store.signals.len();
+    if sig_removed > 0 {
+        if let Err(e) = storage::save_signals(user_id, &signal_store) {
+            tracing::warn!("Failed to save signals after port remove (user {}): {e}", user_id);
+        }
+    }
+
+    let sig_note = if sig_removed > 0 {
+        format!(" (시그널 {}개 함께 삭제)", sig_removed)
+    } else {
+        String::new()
+    };
+    format!("✅ {symbol}{} 삭제 완료{sig_note}", account_tag(&account))
 }
 
 fn cmd_edit(user_id: i64, args: &str) -> String {
@@ -628,6 +656,17 @@ fn cmd_signal(user_id: i64, args: &str) -> String {
                 Ok(c) => c,
                 Err(e) => return e,
             };
+            // 포트폴리오에 해당 종목(+계좌)이 있는지 확인
+            let portfolio = storage::load_portfolio(user_id);
+            let in_portfolio = portfolio.holdings.iter().any(|h| {
+                h.symbol == symbol && (account.is_empty() || h.account == account)
+            });
+            if !in_portfolio {
+                return format!(
+                    "{symbol}{} 이(가) 포트폴리오에 없습니다. /port add 로 먼저 추가하세요.",
+                    account_tag(&account)
+                );
+            }
             let mut store = storage::load_signals(user_id);
             store.signals.push(Signal {
                 id: Uuid::new_v4().to_string(),
