@@ -46,17 +46,25 @@ pub async fn handle_command(
     };
 
     // 접근 제어
-    if owner_chat_id == 0 {
-        // 오너 미설정: chat_id 안내 후 차단
+    let effective_owner = if owner_chat_id == 0 {
+        // 오너 미설정: 첫 메시지 발신자를 오너로 자동 등록
+        let mut config = crate::config::Config::load(storage::CONFIG_PATH)
+            .map_err(|e| teloxide::RequestError::Api(teloxide::ApiError::Unknown(format!("config load failed: {e}"))))?;
+        config.telegram.owner_chat_id = user_id;
+        if let Err(e) = config.save(storage::CONFIG_PATH) {
+            bot.send_message(chat_id, format!("⚠️ 오너 등록 실패: {e:#}")).await?;
+            return Ok(());
+        }
+        tracing::info!("Owner auto-registered: {user_id}");
         bot.send_message(chat_id, format!(
-            "⚠️ 봇 오너 설정이 필요합니다.\n\
-             config.json의 telegram.owner_chat_id 에 아래 값을 입력하세요:\n\n\
-             {user_id}"
+            "✅ 봇 오너로 등록되었습니다. (chat_id: {user_id})"
         )).await?;
-        return Ok(());
-    }
+        user_id
+    } else {
+        owner_chat_id
+    };
 
-    let is_owner = user_id == owner_chat_id;
+    let is_owner = user_id == effective_owner;
     let is_allowed = is_owner || storage::load_allowed_users().contains(&user_id);
 
     if !is_allowed {
