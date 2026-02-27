@@ -111,7 +111,16 @@ pub async fn run_api_actor(mut rx: mpsc::Receiver<ApiRequest>, full_config: Conf
             } => {
                 ctx.rate_limit().await;
                 let result = overseas::get_price(&ctx, &exch, &symbol).await;
-                let _ = respond_to.send(result);
+                // t_rate(당일환율) 부산물로 캐싱
+                if let Ok((_, Some(rate))) = &result {
+                    let kst = chrono::FixedOffset::east_opt(9 * 3600).unwrap();
+                    full_config.exchange_rate.usd_krw = *rate;
+                    full_config.exchange_rate.updated_at = Some(chrono::Utc::now().with_timezone(&kst));
+                    if let Err(e) = full_config.save(storage::CONFIG_PATH) {
+                        tracing::warn!("Failed to save exchange rate to config: {e}");
+                    }
+                }
+                let _ = respond_to.send(result.map(|(price, _)| price));
             }
             ApiRequest::GetBondPrice { isin, respond_to } => {
                 ctx.rate_limit().await;
