@@ -80,7 +80,9 @@ pub async fn check_all_signals(api: &ApiHandle, bot: &Bot, user_id: i64) {
             );
 
             match bot.send_message(chat_id, &alert_msg).await {
-                Ok(_) => {
+                Ok(msg) => {
+                    // 메시지 고정 — 실패해도 알림 전송이 주목적이므로 무시
+                    let _ = bot.pin_chat_message(chat_id, msg.id).await;
                     tracing::info!("Signal triggered: {} {} (user {})", signal_store.signals[idx].id, condition_desc, user_id);
                     signal_store.signals[idx].active = false;
                     any_triggered = true;

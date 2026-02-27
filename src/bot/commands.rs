@@ -24,6 +24,8 @@ pub enum Command {
     Status,
     #[command(description = "핑")]
     Ping,
+    #[command(description = "사용자 관리 (오너 전용): /user add|remove|list")]
+    User(String),
 }
 
 pub async fn handle_command(
@@ -31,10 +33,10 @@ pub async fn handle_command(
     msg: Message,
     cmd: Command,
     api: ApiHandle,
+    owner_chat_id: i64,
 ) -> ResponseResult<()> {
     let chat_id = msg.chat.id;
 
-    // 텔레그램 user_id 추출 (Private 채팅에서 user_id == chat_id)
     let user_id = match &msg.from {
         Some(user) => user.id.0 as i64,
         None => {
@@ -43,12 +45,40 @@ pub async fn handle_command(
         }
     };
 
+    // 접근 제어
+    if owner_chat_id == 0 {
+        // 오너 미설정: chat_id 안내 후 차단
+        bot.send_message(chat_id, format!(
+            "⚠️ 봇 오너 설정이 필요합니다.\n\
+             config.json의 telegram.owner_chat_id 에 아래 값을 입력하세요:\n\n\
+             {user_id}"
+        )).await?;
+        return Ok(());
+    }
+
+    let is_owner = user_id == owner_chat_id;
+    let is_allowed = is_owner || storage::load_allowed_users().contains(&user_id);
+
+    if !is_allowed {
+        bot.send_message(chat_id, format!(
+            "접근 권한이 없습니다.\n(chat_id: {user_id})"
+        )).await?;
+        return Ok(());
+    }
+
     let reply = match cmd {
         Command::Help => help_text(),
         Command::Ping => "pong".to_string(),
         Command::Port(args) => cmd_port(user_id, &args, &api).await,
         Command::Signal(args) => cmd_signal(user_id, &args),
         Command::Status => cmd_status(user_id),
+        Command::User(args) => {
+            if !is_owner {
+                "이 명령어는 봇 오너만 사용할 수 있습니다.".to_string()
+            } else {
+                cmd_user(&args)
+            }
+        }
     };
 
     bot.send_message(chat_id, reply).await?;
@@ -78,6 +108,10 @@ fn help_text() -> String {
      시스템:\n\
      /status — 시스템 상태\n\
      /ping — 핑\n\n\
+     사용자 관리 (오너 전용):\n\
+     /user add [chat_id] — 사용자 추가\n\
+     /user remove [chat_id] — 사용자 삭제\n\
+     /user list — 허용된 사용자 목록\n\n\
      마켓: KRX, NAS, NYS, AMS, BOND\n\
      조건: > [가격], < [가격], > [수익률%], < [수익률%]\n\n\
      📂 계좌 구분 (@계좌):\n\
@@ -851,6 +885,55 @@ fn cmd_signal_purge(user_id: i64) -> String {
     }
 
     format!("✅ 비활성 시그널 {removed}개 삭제 완료")
+}
+
+fn cmd_user(args: &str) -> String {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    match parts.first().copied() {
+        Some("add") => {
+            let id: i64 = match parts.get(1).and_then(|s| s.parse().ok()) {
+                Some(id) => id,
+                None => return "사용법: /user add [chat_id]".to_string(),
+            };
+            let mut users = storage::load_allowed_users();
+            if users.contains(&id) {
+                return format!("{id} 는 이미 허용된 사용자입니다.");
+            }
+            users.push(id);
+            match storage::save_allowed_users(&users) {
+                Ok(_) => format!("✅ {id} 추가 완료"),
+                Err(e) => format!("저장 실패: {e:#}"),
+            }
+        }
+        Some("remove") => {
+            let id: i64 = match parts.get(1).and_then(|s| s.parse().ok()) {
+                Some(id) => id,
+                None => return "사용법: /user remove [chat_id]".to_string(),
+            };
+            let mut users = storage::load_allowed_users();
+            let before = users.len();
+            users.retain(|&u| u != id);
+            if users.len() == before {
+                return format!("{id} 를 찾을 수 없습니다.");
+            }
+            match storage::save_allowed_users(&users) {
+                Ok(_) => format!("✅ {id} 삭제 완료"),
+                Err(e) => format!("저장 실패: {e:#}"),
+            }
+        }
+        Some("list") => {
+            let users = storage::load_allowed_users();
+            if users.is_empty() {
+                "허용된 사용자가 없습니다.".to_string()
+            } else {
+                format!(
+                    "허용된 사용자:\n{}",
+                    users.iter().map(|u| u.to_string()).collect::<Vec<_>>().join("\n")
+                )
+            }
+        }
+        _ => "/user add [chat_id]\n/user remove [chat_id]\n/user list".to_string(),
+    }
 }
 
 fn cmd_status(user_id: i64) -> String {
