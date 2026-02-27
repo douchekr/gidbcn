@@ -6,7 +6,7 @@ use crate::config::{Config, KisApiConfig};
 use crate::models::messages::ApiRequest;
 use crate::models::portfolio::Market;
 
-use super::{auth, bond, domestic, exchange, overseas, stock_info};
+use super::{auth, bond, domestic, overseas, stock_info};
 
 use crate::storage;
 
@@ -108,6 +108,7 @@ impl ActorContext {
 pub async fn run_api_actor(mut rx: mpsc::Receiver<ApiRequest>, full_config: Config) {
     let mut ctx = ActorContext::new(full_config.kis_api.clone());
     let mut full_config = full_config;
+    let mut usd_krw: f64 = 1350.0;
 
     // 시작 시 토큰 확인
     if auth::token_needs_refresh(&ctx.config.token) {
@@ -133,14 +134,9 @@ pub async fn run_api_actor(mut rx: mpsc::Receiver<ApiRequest>, full_config: Conf
             } => {
                 ctx.rate_limit().await;
                 let result = overseas::get_price(&ctx, &exch, &symbol).await;
-                // t_rate(당일환율) 부산물로 캐싱
+                // t_rate(당일환율) 부산물로 메모리 갱신
                 if let Ok((_, Some(rate))) = &result {
-                    let kst = chrono::FixedOffset::east_opt(9 * 3600).unwrap();
-                    full_config.exchange_rate.usd_krw = *rate;
-                    full_config.exchange_rate.updated_at = Some(chrono::Utc::now().with_timezone(&kst));
-                    if let Err(e) = full_config.save(storage::CONFIG_PATH) {
-                        tracing::warn!("Failed to save exchange rate to config: {e}");
-                    }
+                    usd_krw = *rate;
                 }
                 let _ = respond_to.send(result.map(|(price, _)| price));
             }
@@ -150,32 +146,7 @@ pub async fn run_api_actor(mut rx: mpsc::Receiver<ApiRequest>, full_config: Conf
                 let _ = respond_to.send(result);
             }
             ApiRequest::GetExchangeRate { respond_to } => {
-                ctx.rate_limit().await;
-                let result = match exchange::get_usd_krw(&ctx).await {
-                    Ok(rate) => {
-                        // 성공 시 config.json에 캐싱
-                        let kst = chrono::FixedOffset::east_opt(9 * 3600).unwrap();
-                        full_config.exchange_rate.usd_krw = rate;
-                        full_config.exchange_rate.updated_at =
-                            Some(chrono::Utc::now().with_timezone(&kst));
-                        if let Err(e) = full_config.save(storage::CONFIG_PATH) {
-                            tracing::warn!("Failed to save exchange rate to config: {e}");
-                        }
-                        tracing::info!("USD/KRW = {rate} (saved to config)");
-                        Ok(rate)
-                    }
-                    Err(e) => {
-                        // 실패 시 캐시된 환율 사용
-                        if full_config.exchange_rate.updated_at.is_some() {
-                            let cached = full_config.exchange_rate.usd_krw;
-                            tracing::warn!("Exchange rate API failed, using cached {cached}: {e}");
-                            Ok(cached)
-                        } else {
-                            Err(e)
-                        }
-                    }
-                };
-                let _ = respond_to.send(result);
+                let _ = respond_to.send(Ok(usd_krw));
             }
             ApiRequest::GetStockName { prdt_type_cd, pdno, respond_to } => {
                 ctx.rate_limit().await;

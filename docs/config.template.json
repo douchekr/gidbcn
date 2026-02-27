@@ -11,10 +11,6 @@
     "owner_chat_id": 0,
     "users": []
   },
-  "exchange_rate": {
-    "usd_krw": 1350.0,
-    "updated_at": null
-  },
   "scheduler": {
     "signal_check_interval_minutes": 5
   }

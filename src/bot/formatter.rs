@@ -128,7 +128,7 @@ pub fn format_holding_line_cached(h: &Holding, price: &PriceData, usd_krw: f64) 
     format!("{line}⏱")
 }
 
-pub fn format_info(h: &Holding, price: &PriceData, signals: &[&Signal]) -> String {
+pub fn format_info(h: &Holding, price: &PriceData, signals: &[&Signal], usd_krw: f64) -> String {
     let factor = h.market.value_factor();
     let pnl = (price.current_price - h.avg_price) * h.quantity * factor;
     let pnl_pct = if h.avg_price > 0.0 {
@@ -155,11 +155,13 @@ pub fn format_info(h: &Holding, price: &PriceData, signals: &[&Signal]) -> Strin
             fmt_int(eval), fmt_int(pnl), pnl_pct,
         ),
         Market::NAS | Market::NYS | Market::AMS => format!(
-            "📈 {} {}{}\n현재가: {} (전일 대비 {sign}{:.1}%)\n매입가: {} × {}\n평가금액: {}\n손익: {pnl_sign}{} ({pnl_sign}{:.1}%)",
+            "📈 {} {}{}\n현재가: {} (전일 대비 {sign}{:.1}%)\n매입가: {} × {}\n평가금액: {} (약 {}원)\n손익: {pnl_sign}{} ({pnl_sign}{:.1}%)\n💱 USD/KRW: {}",
             h.symbol, name, acct,
             fmt_price_us(price.current_price), price.change_pct,
             fmt_price_us(h.avg_price), fmt_qty(h),
-            fmt_price_us(eval), fmt_price_us(pnl), pnl_pct,
+            fmt_price_us(eval), fmt_int(eval * usd_krw),
+            fmt_price_us(pnl), pnl_pct,
+            fmt_int(usd_krw),
         ),
         Market::BOND => format!(
             "📈 {} {}{}\n현재가: {}원 (전일 대비 {sign}{:.1}%)\n매입가: {} × {}\n평가금액: {}원\n손익: {pnl_sign}{}원 ({pnl_sign}{:.1}%)",

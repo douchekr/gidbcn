@@ -7,8 +7,6 @@ pub struct Config {
     pub kis_api: KisApiConfig,
     pub telegram: TelegramConfig,
     #[serde(default)]
-    pub exchange_rate: ExchangeRateCache,
-    #[serde(default)]
     pub scheduler: SchedulerConfig,
 }
 
@@ -39,20 +37,6 @@ pub struct TelegramConfig {
     pub users: Vec<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExchangeRateCache {
-    pub usd_krw: f64,
-    pub updated_at: Option<DateTime<FixedOffset>>,
-}
-
-impl Default for ExchangeRateCache {
-    fn default() -> Self {
-        Self {
-            usd_krw: 1350.0,
-            updated_at: None,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SchedulerConfig {

@@ -96,9 +96,8 @@ gidbcn/
     │   ├── actor.rs       ← ApiActor 수신 루프 + ApiHandle
     │   ├── auth.rs        ← OAuth 토큰 발급/갱신
     │   ├── domestic.rs    ← 국내주식 현재가 (inquire-price, 날짜 파라미터 없음)
-    │   ├── overseas.rs    ← 해외주식 현재가
+    │   ├── overseas.rs    ← 해외주식 현재가 (t_rate 부산물로 환율 갱신)
     │   ├── bond.rs        ← 국내채권 현재가
-    │   ├── exchange.rs    ← 환율 조회
     │   └── stock_info.rs  ← 종목명 조회 (상품기본조회 CTPF1604R)
     ├── bot/
     │   ├── mod.rs
@@ -209,8 +208,8 @@ custtype: P
 - Query: `AUTH=""`, `EXCD={NAS|NYS|AMS}`, `SYMB={티커}`
 - 응답 (`output`) 주요 필드: `last`(현재가), `name`(종목명), `t_xrat`(원환산당일등락률%), `t_rate`(당일환율)
 - **`rate` 필드 없음**. 등락률은 `t_xrat` 사용 (`name`은 존재하며 실제로 읽음)
-- **`t_rate` 부산물 캐싱**: 해외주식 시세 조회마다 actor가 config.json `exchange_rate`에 자동 저장
-- **환율 전용 호출** (`exchange.rs`): 스케줄러(08:50/15:40)가 AAPL로 동일 엔드포인트 호출해 환율만 갱신
+- **`t_rate` 부산물 캐싱**: 해외주식 시세 조회마다 actor 로컬 변수 `usd_krw`에 자동 갱신 (파일 저장 없음)
+- `GetExchangeRate` 메시지 → actor의 `usd_krw` 메모리 값 즉시 반환 (HTTP 호출 없음)
 
 #### 3. 국내채권 현재가 (장내채권현재가(시세), 국내주식-200)
 - GET `/uapi/domestic-bond/v1/quotations/inquire-price`
@@ -258,15 +257,12 @@ custtype: P
     "owner_chat_id": 123456789,
     "users": [987654321]
   },
-  "exchange_rate": {
-    "usd_krw": 1450.20,
-    "updated_at": "2026-02-27T15:40:00+09:00"
-  },
   "scheduler": {
     "signal_check_interval_minutes": 5
   }
 }
 ```
+- **환율 없음**: `usd_krw`는 config에 저장하지 않음. actor 시작 시 기본값 1350.0, 이후 해외주식 조회 시 t_rate로 자동 갱신.
 
 ### portfolio.json
 ```json
@@ -361,6 +357,7 @@ custtype: P
 - `telegram.owner_chat_id == 0`: 첫 명령 발신자를 오너로 자동 등록 후 config.json 저장
 - owner는 항상 허용. 추가 허용 유저 목록은 `config.json`의 `telegram.users`에 저장
 - 미허용 유저가 명령 시 `"접근 권한이 없습니다. (chat_id: xxx)"` 응답 → owner가 필요 시 추가 가능
+- `owner_chat_id` 캐싱: `thread_local! Cell<Option<i64>>`으로 메모리 유지. 최초 1회만 config.json 읽음. 오너 등록 시 `set_owner_chat_id()` 호출로 즉시 갱신.
 
 ### 시스템
 | 명령어 | 설명 |
@@ -387,9 +384,9 @@ custtype: P
 | 작업 | 주기 | 조건 |
 |---|---|---|
 | 시그널 체크 (현재가) | 5분 | 장중에만 (KRX: 09:00~15:30, US: 22:30~05:00 KST) |
-| 환율 조회 (스케줄러) | 1일 2회 | 08:50, 15:40 KST |
-| 환율 조회 (on-demand) | `/port list`, `/port summary` 실행 시 | 항상. 성공 시 config.json 저장 |
 | 토큰 갱신 | 만료 1시간 전 | `expires_at` 기준 자동 판단 (API Actor가 매 요청 전 체크) |
+
+- 환율 전용 스케줄 없음. 해외주식 시그널 체크(5분) 시 `GetOverseasPrice` t_rate 부산물로 자동 갱신됨.
 
 ---
 
@@ -477,21 +474,33 @@ uuid = { version = "1", features = ["v4"] }
 ──────────
 💰 총 평가: 145,234,500원
 💵 총 손익: +1,234,500원 (+0.9%)
+💱 USD/KRW: 1,450
 ```
 - 총 평가 = KRX원화 + 채권원화 + (미국달러 × usd_krw)
+- `💱 USD/KRW` 줄: 미국 종목이 있을 때만 표시
 - `⏱` 마커: 직전 캐시 가격 사용 (실시간 조회 실패 시)
 
-### /port info [종목코드]
+### /port info [종목코드] (국내)
 ```
 📈 005930 삼성전자
 현재가: 72,500원 (전일 대비 +1.2%)
-매입가: 70,000원 × 10주
+매입가: 70,000원 × 10
 평가금액: 725,000원
 손익: +25,000원 (+3.6%)
 
 ⚡ 설정된 시그널:
 • 가격 ≥ 80,000 → 알림
 • 수익률 ≥ 20% → 알림
+```
+
+### /port info [종목코드] (미국)
+```
+📈 TSLA 테슬라
+현재가: $195.20 (전일 대비 +2.0%)
+매입가: $180.50 × 5
+평가금액: $976.00 (약 1,415,200원)
+손익: +$73.50 (+8.1%)
+💱 USD/KRW: 1,450
 ```
 
 ### /port summary
@@ -503,4 +512,6 @@ uuid = { version = "1", features = ["v4"] }
 ──────────
 💰 총 평가: 133,413,000원
 💵 총 손익: +3,234,500원 (+2.5%)
+💱 USD/KRW: 1,450
 ```
+- `💱 USD/KRW` 줄: 미국 종목 평가금액이 0보다 클 때만 표시

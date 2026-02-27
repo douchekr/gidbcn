@@ -28,6 +28,24 @@ pub enum Command {
     User(String),
 }
 
+thread_local! {
+    static OWNER_CHAT_ID: std::cell::Cell<Option<i64>> = std::cell::Cell::new(None);
+}
+
+fn get_owner_chat_id() -> i64 {
+    OWNER_CHAT_ID.with(|c| c.get()).unwrap_or_else(|| {
+        let id = crate::config::Config::load(storage::CONFIG_PATH)
+            .map(|cfg| cfg.telegram.owner_chat_id)
+            .unwrap_or(0);
+        OWNER_CHAT_ID.with(|c| c.set(Some(id)));
+        id
+    })
+}
+
+fn set_owner_chat_id(id: i64) {
+    OWNER_CHAT_ID.with(|c| c.set(Some(id)));
+}
+
 pub async fn handle_command(
     bot: Bot,
     msg: Message,
@@ -44,10 +62,7 @@ pub async fn handle_command(
         }
     };
 
-    // config에서 매번 최신 owner_chat_id 로드 (오너 자동 등록 후 즉시 반영)
-    let owner_chat_id = crate::config::Config::load(storage::CONFIG_PATH)
-        .map(|c| c.telegram.owner_chat_id)
-        .unwrap_or(0);
+    let owner_chat_id = get_owner_chat_id();
 
     // 접근 제어
     let effective_owner = if owner_chat_id == 0 {
@@ -59,6 +74,7 @@ pub async fn handle_command(
             bot.send_message(chat_id, format!("⚠️ 오너 등록 실패: {e:#}")).await?;
             return Ok(());
         }
+        set_owner_chat_id(user_id);
         tracing::info!("Owner auto-registered: {user_id}");
         bot.send_message(chat_id, format!(
             "✅ 봇 오너로 등록되었습니다. (chat_id: {user_id})"
@@ -511,6 +527,9 @@ async fn cmd_list(user_id: i64, api: &ApiHandle) -> String {
             formatter::fmt_quantity(pnl),
             pnl_pct,
         ));
+        if !overseas.is_empty() {
+            msg.push_str(&format!("\n💱 USD/KRW: {}", formatter::fmt_int(usd_krw)));
+        }
     }
 
     if has_cached {
@@ -548,6 +567,12 @@ async fn cmd_info(user_id: i64, args: &str, api: &ApiHandle) -> String {
     let market = store.holdings[indices[0]].market;
     let price_result = api.get_price_for_market(market, symbol).await;
 
+    let usd_krw = if matches!(market, Market::NAS | Market::NYS | Market::AMS) {
+        api.get_exchange_rate().await.unwrap_or(1350.0)
+    } else {
+        0.0
+    };
+
     if let Ok(ref price) = price_result {
         for &idx in &indices {
             store.holdings[idx].cached_price = Some(price.current_price);
@@ -567,7 +592,7 @@ async fn cmd_info(user_id: i64, args: &str, api: &ApiHandle) -> String {
             .collect();
 
         let part = match &price_result {
-            Ok(price) => formatter::format_info(h, price, &signals),
+            Ok(price) => formatter::format_info(h, price, &signals, usd_krw),
             Err(e) => {
                 tracing::warn!("Failed to get price for {symbol}: {e:#}");
                 let display_name = if h.name.is_empty() { "-" } else { &h.name };
@@ -706,6 +731,9 @@ async fn cmd_summary(user_id: i64, api: &ApiHandle) -> String {
         pnl_pct,
     );
 
+    if overseas_val > 0.0 {
+        msg.push_str(&format!("\n💱 USD/KRW: {}", formatter::fmt_int(usd_krw)));
+    }
     if has_cached {
         msg.push_str("\n⏱ 직전 조회 가격");
     }
