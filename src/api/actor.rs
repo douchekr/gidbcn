@@ -2,7 +2,7 @@ use anyhow::Result;
 use reqwest::header::{HeaderMap, HeaderValue};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::config::{Config, KisApiConfig};
+use crate::config::KisApiConfig;
 use crate::models::messages::ApiRequest;
 use crate::models::portfolio::Market;
 
@@ -86,14 +86,15 @@ impl ActorContext {
         Ok(headers)
     }
 
-    async fn refresh_token(&mut self, full_config: &mut Config) {
+    async fn refresh_token(&mut self) {
         tracing::info!("Refreshing access token...");
         match auth::issue_token(&self.client, &self.config).await {
             Ok(token_info) => {
                 tracing::info!("Token refreshed, expires at {}", token_info.expires_at);
                 self.config.token = Some(token_info.clone());
-                full_config.kis_api.token = Some(token_info);
-                if let Err(e) = full_config.save(storage::CONFIG_PATH) {
+                if let Err(e) = storage::update_config(|c| {
+                    c.kis_api.token = Some(token_info);
+                }) {
                     tracing::error!("Failed to save config after token refresh: {e}");
                 }
             }
@@ -105,20 +106,20 @@ impl ActorContext {
 }
 
 /// API Actor 메인 루프
-pub async fn run_api_actor(mut rx: mpsc::Receiver<ApiRequest>, full_config: Config) {
-    let mut ctx = ActorContext::new(full_config.kis_api.clone());
-    let mut full_config = full_config;
+pub async fn run_api_actor(mut rx: mpsc::Receiver<ApiRequest>) {
+    let kis_config = storage::with_config(|c| c.kis_api.clone());
+    let mut ctx = ActorContext::new(kis_config);
     let mut usd_krw: f64 = 1350.0;
 
     // 시작 시 토큰 확인
     if auth::token_needs_refresh(&ctx.config.token) {
-        ctx.refresh_token(&mut full_config).await;
+        ctx.refresh_token().await;
     }
 
     while let Some(req) = rx.recv().await {
         // 토큰 갱신 체크
         if auth::token_needs_refresh(&ctx.config.token) {
-            ctx.refresh_token(&mut full_config).await;
+            ctx.refresh_token().await;
         }
 
         match req {

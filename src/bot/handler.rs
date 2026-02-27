@@ -2,10 +2,11 @@ use teloxide::prelude::*;
 
 use crate::api::ApiHandle;
 use crate::bot::commands::Command;
-use crate::config::TelegramConfig;
+use crate::storage;
 
-pub async fn run_bot(config: TelegramConfig, api: ApiHandle) {
-    let bot = Bot::new(&config.bot_token);
+pub async fn run_bot(api: ApiHandle) {
+    let bot_token = storage::with_config(|c| c.telegram.bot_token.clone());
+    let bot = Bot::new(&bot_token);
     let handler = Update::filter_message().filter_command::<Command>().endpoint(
         move |bot: Bot, msg: Message, cmd: Command| {
             let api = api.clone();

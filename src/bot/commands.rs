@@ -14,6 +14,8 @@ use crate::storage;
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "snake_case")]
 pub enum Command {
+    #[command(description = "봇 시작")]
+    Start,
     #[command(description = "도움말")]
     Help,
     #[command(description = "포트폴리오: /port add|remove|edit|list|info|summary ...")]
@@ -26,24 +28,6 @@ pub enum Command {
     Ping,
     #[command(description = "사용자 관리 (오너 전용): /user add|remove|list")]
     User(String),
-}
-
-thread_local! {
-    static OWNER_CHAT_ID: std::cell::Cell<Option<i64>> = std::cell::Cell::new(None);
-}
-
-fn get_owner_chat_id() -> i64 {
-    OWNER_CHAT_ID.with(|c| c.get()).unwrap_or_else(|| {
-        let id = crate::config::Config::load(storage::CONFIG_PATH)
-            .map(|cfg| cfg.telegram.owner_chat_id)
-            .unwrap_or(0);
-        OWNER_CHAT_ID.with(|c| c.set(Some(id)));
-        id
-    })
-}
-
-fn set_owner_chat_id(id: i64) {
-    OWNER_CHAT_ID.with(|c| c.set(Some(id)));
 }
 
 pub async fn handle_command(
@@ -62,19 +46,17 @@ pub async fn handle_command(
         }
     };
 
-    let owner_chat_id = get_owner_chat_id();
+    let owner_chat_id = storage::with_config(|c| c.telegram.owner_chat_id);
 
     // 접근 제어
     let effective_owner = if owner_chat_id == 0 {
         // 오너 미설정: 첫 메시지 발신자를 오너로 자동 등록
-        let mut config = crate::config::Config::load(storage::CONFIG_PATH)
-            .map_err(|e| teloxide::RequestError::Api(teloxide::ApiError::Unknown(format!("config load failed: {e}"))))?;
-        config.telegram.owner_chat_id = user_id;
-        if let Err(e) = config.save(storage::CONFIG_PATH) {
+        if let Err(e) = storage::update_config(|c| {
+            c.telegram.owner_chat_id = user_id;
+        }) {
             bot.send_message(chat_id, format!("⚠️ 오너 등록 실패: {e:#}")).await?;
             return Ok(());
         }
-        set_owner_chat_id(user_id);
         tracing::info!("Owner auto-registered: {user_id}");
         bot.send_message(chat_id, format!(
             "✅ 봇 오너로 등록되었습니다. (chat_id: {user_id})"
@@ -85,7 +67,7 @@ pub async fn handle_command(
     };
 
     let is_owner = user_id == effective_owner;
-    let is_allowed = is_owner || storage::load_allowed_users().contains(&user_id);
+    let is_allowed = is_owner || storage::with_config(|c| c.telegram.users.contains(&user_id));
 
     if !is_allowed {
         bot.send_message(chat_id, format!(
@@ -95,7 +77,7 @@ pub async fn handle_command(
     }
 
     let reply = match cmd {
-        Command::Help => help_text(),
+        Command::Start | Command::Help => help_text(),
         Command::Ping => "pong".to_string(),
         Command::Port(args) => cmd_port(user_id, &args, &api).await,
         Command::Signal(args) => cmd_signal(user_id, &args),

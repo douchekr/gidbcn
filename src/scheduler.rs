@@ -3,22 +3,18 @@ use teloxide::prelude::*;
 use tokio::time::{interval, Duration};
 
 use crate::api::ApiHandle;
-use crate::config::SchedulerConfig;
 use crate::signal::engine;
 use crate::storage;
 
 pub async fn run_scheduler(
     api: ApiHandle,
-    config: SchedulerConfig,
     bot: Bot,
 ) {
-    let signal_interval = Duration::from_secs(config.signal_check_interval_minutes * 60);
+    let interval_min = storage::with_config(|c| c.scheduler.signal_check_interval_minutes);
+    let signal_interval = Duration::from_secs(interval_min * 60);
     let mut signal_tick = interval(signal_interval);
 
-    tracing::info!(
-        "Scheduler started: signal check every {}min",
-        config.signal_check_interval_minutes
-    );
+    tracing::info!("Scheduler started: signal check every {interval_min}min");
 
     loop {
         signal_tick.tick().await;

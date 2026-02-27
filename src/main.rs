@@ -103,22 +103,25 @@ async fn main() {
         .init();
     tracing::info!("gidbcn starting... (log dir: {}, retain: {}d)", config.log.dir, config.log.retain_days);
 
-    // 4. API Actor 채널 생성 + spawn
+    // 4. Config 인메모리 적재
+    storage::init_config(config);
+
+    // 5. API Actor 채널 생성 + spawn
     let (api_tx, api_rx) = mpsc::channel::<ApiRequest>(32);
     let api_handle = ApiHandle::new(api_tx);
-    tokio::spawn(run_api_actor(api_rx, config.clone()));
+    tokio::spawn(run_api_actor(api_rx));
 
-    // 5. 텔레그램 봇 + 스케줄러 spawn
-    let tg_bot = Bot::new(&config.telegram.bot_token);
+    // 6. 텔레그램 봇 + 스케줄러 spawn
+    let bot_token = storage::with_config(|c| c.telegram.bot_token.clone());
+    let tg_bot = Bot::new(&bot_token);
 
     tokio::spawn(scheduler::run_scheduler(
         api_handle.clone(),
-        config.scheduler.clone(),
         tg_bot.clone(),
     ));
 
     tracing::info!("Bot and scheduler running");
 
-    // 6. 텔레그램 봇 실행 (메인 태스크, block)
-    bot::run_bot(config.telegram, api_handle).await;
+    // 7. 텔레그램 봇 실행 (메인 태스크, block)
+    bot::run_bot(api_handle).await;
 }
