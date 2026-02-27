@@ -7,51 +7,106 @@
 ```
 사용자 텔레그램 메시지
   → teloxide 디스패처 (handler.rs)
+      비커맨드 메시지 → default_handler로 무시
   → handle_command() (commands.rs)
        │
-       ├─ [포트폴리오 조회 없는 명령: /add, /remove, /edit, /signal*]
+       ├─ [시세 조회 없는 명령: /port add, /port remove, /port edit, /signal*]
        │    storage::load_*()          // std::fs로 JSON 읽기
        │    데이터 변경
        │    storage::save_*()          // std::fs로 JSON 쓰기
        │    응답 문자열 반환
        │
-       └─ [현재가 필요한 명령: /list, /info, /summary]
+       └─ [현재가 필요한 명령: /port list, /port info, /port summary]
             storage::load_portfolio()
-            api.get_price_for_market() ──► API Actor (mpsc)
-                                          reqwest → 한투 API
-                                      ◄── PriceData (oneshot)
+            ┌─ CART 종목: cached_price 직접 사용 (API 호출 스킵)
+            └─ 기타 종목: api.get_price_for_market() ──► API Actor (mpsc)
+                                                          reqwest → 한투 API
+                                                      ◄── PriceData (oneshot)
             formatter로 메시지 생성
-            [이름 캐싱] storage::save_portfolio()  // name 비어있던 경우만
+            [캐시 갱신] storage::save_portfolio()  // name, cached_price, cached_at
             응답 문자열 반환
   → bot.send_message()
 ```
 
-**JSON 파일 경로**: `/opt/kkuepark/gidbcn/portfolio_{user_id}.json`, `signals_{user_id}.json`
+**JSON 파일 경로**: `/opt/kkuepark/gidbcn/`
+- `portfolio.json` — 전체 사용자 포트폴리오 (user_id가 최상위 키)
+- `signals.json` — 전체 사용자 시그널 (user_id가 최상위 키)
+
 **동기 I/O**: `std::fs` 직접 사용 (수 KB 파일, current_thread에서 블로킹 무시 가능)
 
 ---
 
-## 스케줄 작업
-
-`tokio::select!`로 두 interval을 동시 대기:
+## main.rs 초기화 흐름
 
 ```
-minute_tick (1분마다)
-  → 현재 KST 시각 확인
-  → 08:50 또는 15:40이면: api.get_exchange_rate() → config.json 갱신
-
-signal_tick (기본 5분마다)
-  → is_market_hours()?
-      KRX: 09:00~15:30 KST
-      US:  22:30~05:00 KST
-  → 장중 아니면 스킵
-  → storage::list_user_ids()로 사용자 목록 조회
-  → 각 사용자별 check_all_signals()
-       활성 시그널 순회 → 현재가 조회 → 조건 평가
-       발동 시: 텔레그램 알림 전송 + active=false 저장
+1. Config::load() — 파일 없으면 템플릿 생성 후 종료
+2. log 섹션 마이그레이션 — 누락 시 defaults 포함 자동 저장
+3. 필수 설정 검증 (bot_token, app_key, app_secret, hts_id)
+4. 로깅 초기화 (stdout: RUST_LOG, 파일: WARN 이상)
+5. storage::init_config(config) — Config 인메모리 싱글턴 적재
+6. API Actor 채널 생성 (mpsc, buffer=32) + tokio::spawn
+7. 스케줄러 spawn (api_handle + tg_bot)
+8. 텔레그램 봇 실행 (메인 태스크, block)
 ```
 
-**토큰 갱신**: API Actor가 매 요청 전 `token_needs_refresh()`를 확인. 만료 1시간 전이면 자동 갱신 후 `config.json` 저장.
+---
+
+## Config 인메모리 싱글턴
+
+`thread_local! RefCell<Option<Config>>`로 관리. current_thread 런타임이므로 단일 스레드 보장.
+
+```rust
+// storage.rs
+thread_local! {
+    static IN_MEMORY_CONFIG: RefCell<Option<Config>> = RefCell::new(None);
+}
+
+pub fn init_config(config: Config) { ... }      // 시작 시 1회
+pub fn with_config<F, R>(f: F) -> R { ... }     // 읽기 전용
+pub fn update_config<F>(f: F) -> Result<()> { ... } // 변경 + 파일 저장
+```
+
+- `with_config`: 읽기 전용 접근. 클로저로 필요한 값만 복사해서 반환.
+- `update_config`: 메모리 변경 + `config.json` 파일 저장. 토큰 갱신, 오너 등록 등에 사용.
+
+---
+
+## 스케줄러
+
+`tokio::time::interval` 단일 루프. `tokio-cron-scheduler` 미사용.
+
+```rust
+pub async fn run_scheduler(api: ApiHandle, bot: Bot) {
+    let mut signal_tick = interval(signal_interval);  // 기본 5분
+    loop {
+        signal_tick.tick().await;
+        if is_market_hours() {
+            for user_id in storage::list_user_ids() {
+                engine::check_all_signals(&api, &bot, user_id).await;
+            }
+        }
+    }
+}
+```
+
+### 장시간 판단
+
+```rust
+fn is_market_hours() -> bool {
+    let hhmm = hour * 100 + min;  // KST 기준
+    let krx_open = hhmm >= 900 && hhmm <= 1530;
+    let us_open = hhmm >= 2230 || hhmm <= 500;
+    krx_open || us_open
+}
+```
+
+- KRX와 US 장 시간대 중 하나라도 열려있으면 시그널 체크 실행
+- CART/BOND 종목: `Market::is_open_now()` = false → 시그널 엔진에서 개별 스킵
+- **환율 별도 스케줄 없음**: 해외주식 시세 조회 시 `t_rate` 부산물로 actor 메모리 갱신
+
+### 토큰 갱신
+
+API Actor가 매 요청 전 `token_needs_refresh()` 확인. 만료 1시간 전이면 자동 갱신 후 `update_config()`로 저장.
 
 ---
 
@@ -75,15 +130,13 @@ main.rs에서 생성:
   Bot Task / 스케줄러 / 시그널 엔진
        │
        ├─ oneshot::channel() 생성
-       ├─ mpsc.send(ApiRequest { symbol, respond_to: tx }) ──►  API Actor
-       │                                                          ├─ rate_limit() (50ms)
-       │                                                          ├─ reqwest GET → 한투 API
-       ◄── rx.await (응답 대기)  ◄── respond_to.send(Result) ────┘
-
-Fire-and-forget (토큰 갱신):
-
-  Bot Task ──[RefreshToken]──► API Actor   (respond_to 없음)
+       ├─ mpsc.send(ApiRequest { ..., respond_to: tx }) ──►  API Actor
+       │                                                       ├─ rate_limit() (50ms)
+       │                                                       ├─ send_with_retry() → 한투 API
+       ◄── rx.await (응답 대기)  ◄── respond_to.send(Result) ──┘
 ```
+
+토큰 갱신은 actor 내부에서 자체 처리 (외부 메시지 없음).
 
 ### ApiHandle
 
@@ -104,6 +157,17 @@ impl ApiHandle {
         }).await?;
         rx.await?
     }
+
+    /// Market에 따라 적절한 현재가 API 호출
+    pub async fn get_price_for_market(&self, market: Market, symbol: &str) -> Result<PriceData> {
+        match market {
+            Market::KRX  => self.get_domestic_price(symbol).await,
+            Market::NAS | Market::NYS | Market::AMS
+                         => self.get_overseas_price(market.exchange_code(), symbol).await,
+            Market::BOND => { /* bond → PriceData 변환 */ },
+            Market::CART => anyhow::bail!("CART: 수동 관리 종목"),
+        }
+    }
 }
 ```
 
@@ -113,11 +177,11 @@ impl ApiHandle {
 
 ```rust
 pub enum ApiRequest {
-    GetDomesticPrice   { symbol, respond_to: oneshot::Sender<Result<PriceData>> },
-    GetOverseasPrice   { exchange, symbol, respond_to: ... },
-    GetBondPrice       { isin, respond_to: ... },
-    GetExchangeRate    { respond_to: ... },
-    RefreshToken,      // fire-and-forget
+    GetDomesticPrice { symbol, respond_to: oneshot::Sender<Result<PriceData>> },
+    GetOverseasPrice { exchange, symbol, respond_to: ... },
+    GetBondPrice     { isin, respond_to: ... },
+    GetExchangeRate  { respond_to: ... },
+    GetStockName     { prdt_type_cd, pdno, respond_to: ... },
 }
 ```
 
@@ -126,20 +190,28 @@ pub enum ApiRequest {
 `ActorContext`가 reqwest::Client, 토큰, rate limiter를 독점 소유. 외부 접근 불가.
 
 ```rust
-pub async fn run_api_actor(mut rx: mpsc::Receiver<ApiRequest>, config: Config) {
-    let mut ctx = ActorContext::new(config.kis_api.clone());
+pub async fn run_api_actor(mut rx: mpsc::Receiver<ApiRequest>) {
+    let kis_config = storage::with_config(|c| c.kis_api.clone());
+    let mut ctx = ActorContext::new(kis_config);
+    let mut usd_krw: f64 = 1350.0;  // 해외주식 조회 시 t_rate로 갱신
 
     while let Some(req) = rx.recv().await {
-        // 매 요청마다 토큰 만료 체크
         if auth::token_needs_refresh(&ctx.config.token) {
-            ctx.refresh_token(&mut config).await;
+            ctx.refresh_token().await;  // 내부에서 update_config() 저장
         }
-
         match req {
             ApiRequest::GetDomesticPrice { symbol, respond_to } => {
-                ctx.rate_limit().await;   // 50ms 간격 보장
+                ctx.rate_limit().await;
                 let result = domestic::get_price(&ctx, &symbol).await;
                 let _ = respond_to.send(result);
+            }
+            ApiRequest::GetOverseasPrice { exchange, symbol, respond_to } => {
+                ctx.rate_limit().await;
+                let result = overseas::get_price(&ctx, &exchange, &symbol).await;
+                if let Ok((_, Some(rate))) = &result {
+                    usd_krw = *rate;  // t_rate 부산물로 환율 갱신
+                }
+                let _ = respond_to.send(result.map(|(price, _)| price));
             }
             // ... 나머지 동일 패턴
         }
@@ -147,8 +219,13 @@ pub async fn run_api_actor(mut rx: mpsc::Receiver<ApiRequest>, config: Config) {
 }
 ```
 
-- `rate_limit()`: 마지막 요청 이후 50ms 미경과 시 sleep. 초당 20회 제한 준수.
-- 모든 tx가 drop되면 `rx.recv()` → `None` → 루프 종료.
+### stale connection 재시도 (`send_with_retry`)
+
+HTTP keep-alive 연결을 서버가 종료한 뒤 클라이언트가 재사용 시도 시 발생하는 오류 처리:
+
+- 연결 오류(`is_request` / `is_connect`)에 한해 1회 재시도
+- 타임아웃(`is_timeout`)은 재시도하지 않음 (대기 시간 2배 방지)
+- `pool_idle_timeout(55s)` 1차 방어 + `send_with_retry` 2차 방어
 
 ### current_thread에서의 동작
 
@@ -165,6 +242,27 @@ Mutex 없이 채널만으로 동시성 확보.
 
 ---
 
+## CART 마켓 (수동 관리)
+
+시세 자동 조회가 불가능한 자산(비상장주식, 펀드, 크립토, 실물자산 등)을 포트폴리오에 수동 관리.
+
+### 특성
+- `Market::is_open_now()` → `false` (스케줄러·시그널에서 자동 제외)
+- API 호출 없음 → `cached_price`를 현재가로 직접 사용
+- 시그널 설정 불허 (자동 시세 조회 불가)
+- 포맷: 원화 기준 (KRX와 동일)
+
+### 명령어
+```
+/port add CART 비트코인 2 50000000 @코인 =55000000
+/port edit 비트코인 2 50000000 =55000000 @코인
+```
+- `이름 = 종목코드` (단일 토큰)
+- `=현재가`: 프리픽스로 현재가 지정 (CART 전용). `@계좌`와 순서 자유.
+- `=현재가` 생략 시 매입가를 현재가로 사용
+
+---
+
 ## 시그널 판정 로직
 
 **방식**: REST 폴링. WebSocket 미사용 (종목 50개 미만, 5분 주기면 rate limit 여유 충분).
@@ -178,8 +276,10 @@ Mutex 없이 채널만으로 동시성 확보.
        1. portfolio.json + signals.json 로드
        2. 활성(active=true) 시그널만 순회
        3. 포트폴리오에서 종목의 Market 파악 (없으면 스킵)
-       4. API Actor에 현재가 요청 (mpsc/oneshot)
-       5. 조건 평가 → 발동 시 텔레그램 전송 + active=false 저장
+       4. market.is_open_now()? 장외면 스킵
+       5. API Actor에 현재가 요청 (mpsc/oneshot)
+       6. cached_price/cached_at 갱신
+       7. 조건 평가 → 발동 시 텔레그램 전송 + active=false 저장
 ```
 
 ### 조건별 판정
@@ -193,27 +293,6 @@ Mutex 없이 채널만으로 동시성 확보.
 
 ### 발동 후 처리
 
-- **1회성**: 발동 즉시 `active: false` → signals.json 저장. 재발동하려면 사용자가 다시 설정.
-- 한 주기 내 여러 시그널 발동 가능 → 변경분 한 번에 저장.
-
----
-
-## 스케줄러 상세
-
-`tokio::select!`로 두 개의 interval을 동시 대기:
-
-- **signal_tick** (설정값, 기본 5분): `is_market_hours()` 통과 시 `check_all_signals()` 실행
-- **minute_tick** (1분): 환율 갱신 시간(08:50, 15:40 KST) 확인. 중복 방지를 위해 `last_exchange_update` 추적.
-
-### 장시간 판단
-
-```rust
-fn is_market_hours() -> bool {
-    let hhmm = hour * 100 + min;  // KST 기준
-    let krx_open = hhmm >= 900 && hhmm <= 1530;
-    let us_open = hhmm >= 2230 || hhmm <= 500;
-    krx_open || us_open
-}
-```
-
-KRX와 US 장 시간대 중 하나라도 열려있으면 체크 실행. 장외 시간에는 불필요한 API 호출 안 함.
+- **1회성**: 텔레그램 전송 성공 시에만 `active: false` → signals.json 저장
+- 전송 실패 시 `active` 유지 → 다음 주기에 재시도
+- 한 주기 내 여러 시그널 발동 가능 → 변경분 한 번에 저장
