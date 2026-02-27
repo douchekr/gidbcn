@@ -7,7 +7,9 @@
     "token": null
   },
   "telegram": {
-    "bot_token": "YOUR_BOT_TOKEN"
+    "bot_token": "YOUR_BOT_TOKEN",
+    "owner_chat_id": 0,
+    "users": []
   },
   "exchange_rate": {
     "usd_krw": 1350.0,
