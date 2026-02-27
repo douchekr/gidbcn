@@ -167,7 +167,9 @@ authorization: Bearer {access_token}
 appkey: {APP_KEY}
 appsecret: {APP_SECRET}
 tr_id: {거래ID}
+custtype: P
 ```
+- `custtype: P` — 국내주식·채권 전 API 필수(Y). 해외주식 현재가상세는 선택(N)이지만 항상 전송해도 무해. `common_headers()`에서 전 엔드포인트 공통 적용.
 
 ### 엔드포인트
 
@@ -192,14 +194,21 @@ tr_id: {거래ID}
 - **`t_rate` 부산물 캐싱**: 해외주식 시세 조회마다 actor가 config.json `exchange_rate`에 자동 저장
 - **환율 전용 호출** (`exchange.rs`): 스케줄러(08:50/15:40)가 AAPL로 동일 엔드포인트 호출해 환율만 갱신
 
-#### 3. 국내채권 현재가
+#### 3. 국내채권 현재가 (장내채권현재가(시세), 국내주식-200)
 - GET `/uapi/domestic-bond/v1/quotations/inquire-price`
-- tr_id: `FHKBJ773400C0`
-- Query: `FID_COND_MRKT_DIV_CODE=B`, `FID_INPUT_ISCD={ISIN 12자리}`
-- 응답 (`output`): `hts_kor_isnm`(종목명), `bond_prpr`(현재가), `prdy_ctrt`(등락률)
+- tr_id: `FHKBJ773400C0` (모의투자 미지원)
+- Query: `FID_COND_MRKT_DIV_CODE=B`, `FID_INPUT_ISCD={ISIN 12자리}` (예: `KR2033022D33`)
+- 응답 (`output`) 주요 필드:
+  - `hts_kor_isnm` — 종목명
+  - `bond_prpr` — 채권현재가 (액면가 10,000원 기준 가격, 예: 10265.00)
+  - `bond_prdy_vrss` — 전일대비
+  - `prdy_ctrt` — 전일대비율(등락률)
+  - `ernn_rate` — 현재수익률(YTM)
+  - `acml_vol` — 누적거래량
 - **채권 가격 단위**: `bond_prpr`는 액면가 10,000원 기준 가격 (예: 7,485 = 74.85%)
 - **채권 수량 단위**: `quantity`는 액면가 1,000원 단위 수량 (예: 50,000 = 액면 5,000만원)
 - **평가금액 계산**: `price × quantity × 0.1` → `Market::value_factor()` = 0.1 적용
+- **주의**: `custtype: P` 헤더 필수. 미전송 시 요청 실패
 
 #### 4. 종목명 조회 (상품기본조회)
 - GET `/uapi/domestic-stock/v1/quotations/search-info`

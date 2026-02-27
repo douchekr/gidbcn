@@ -61,6 +61,7 @@ impl ActorContext {
         headers.insert("appkey", HeaderValue::from_str(&self.config.app_key)?);
         headers.insert("appsecret", HeaderValue::from_str(&self.config.app_secret)?);
         headers.insert("tr_id", HeaderValue::from_str(tr_id)?);
+        headers.insert("custtype", HeaderValue::from_static("P"));
         Ok(headers)
     }
 

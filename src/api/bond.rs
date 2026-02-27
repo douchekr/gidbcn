@@ -10,7 +10,7 @@ pub async fn get_price(ctx: &ActorContext, isin: &str) -> Result<BondData> {
         ctx.config.base_url
     );
 
-    let resp: serde_json::Value = ctx
+    let http_resp = ctx
         .client
         .get(&url)
         .headers(ctx.common_headers("FHKBJ773400C0")?)
@@ -20,10 +20,13 @@ pub async fn get_price(ctx: &ActorContext, isin: &str) -> Result<BondData> {
         ])
         .send()
         .await
-        .context("Bond price request failed")?
-        .json()
-        .await
-        .context("Bond price parse failed")?;
+        .context("Bond price request failed")?;
+
+    let status = http_resp.status();
+    let body = http_resp.text().await.context("Bond price body read failed")?;
+    let resp: serde_json::Value = serde_json::from_str(&body).with_context(|| {
+        format!("Bond price parse failed (HTTP {status}): {body}")
+    })?;
 
     let output = &resp["output"];
     Ok(BondData {
