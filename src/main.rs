@@ -99,7 +99,7 @@ async fn main() {
         .unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::registry()
         .with(fmt::layer().with_filter(stdout_filter))
-        .with(fmt::layer().with_writer(non_blocking).with_filter(LevelFilter::WARN))
+        .with(fmt::layer().with_ansi(false).with_writer(non_blocking).with_filter(LevelFilter::WARN))
         .init();
     tracing::info!("gidbcn starting... (log dir: {}, retain: {}d)", config.log.dir, config.log.retain_days);
 
