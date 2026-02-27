@@ -106,7 +106,7 @@ fn help_text() -> String {
      /port add [마켓] [종목코드] [수량] [매입가] [종목명] [@계좌]\n\
      /port remove [종목코드|*] [@계좌]\n\
      /port edit [종목코드] [수량] [매입가] [@계좌]\n\
-     /port list — 전체 포트폴리오\n\
+     /port list [@계좌] — 전체 포트폴리오 (계좌 필터)\n\
      /port info [종목코드] [@계좌] — 종목 상세\n\
      /port summary — 자산배분 요약\n\n\
      시그널:\n\
@@ -166,14 +166,14 @@ async fn cmd_port(user_id: i64, args: &str, api: &ApiHandle) -> String {
         Some("add")     => cmd_add(user_id, &rest, api).await,
         Some("remove")  => cmd_remove(user_id, &rest),
         Some("edit")    => cmd_edit(user_id, &rest),
-        Some("list")    => cmd_list(user_id, api).await,
+        Some("list")    => cmd_list(user_id, &rest, api).await,
         Some("info")    => cmd_info(user_id, &rest, api).await,
         Some("summary") => cmd_summary(user_id, api).await,
         _ => "사용법:\n\
               /port add [마켓] [종목코드] [수량] [매입가] [종목명] [@계좌]\n\
               /port remove [종목코드|*] [@계좌]\n\
               /port edit [종목코드] [수량] [매입가] [@계좌]\n\
-              /port list\n\
+              /port list [@계좌]\n\
               /port info [종목코드] [@계좌]\n\
               /port summary"
             .to_string(),
@@ -385,14 +385,26 @@ fn cmd_edit(user_id: i64, args: &str) -> String {
     format!("✅ {symbol}{} 수정 완료 (수량: {quantity}, 매입가: {avg_price})", account_tag(&account))
 }
 
-async fn cmd_list(user_id: i64, api: &ApiHandle) -> String {
+async fn cmd_list(user_id: i64, args: &str, api: &ApiHandle) -> String {
+    let raw: Vec<&str> = args.split_whitespace().collect();
+    let (_, account_filter) = extract_account(&raw);
+
     let mut store = storage::load_portfolio(user_id);
     if store.holdings.is_empty() {
         return "포트폴리오가 비어있습니다. /port add 로 종목을 추가하세요.".to_string();
     }
 
+    // 계좌 필터 적용
+    if !account_filter.is_empty() {
+        store.holdings.retain(|h| h.account == account_filter);
+        if store.holdings.is_empty() {
+            return format!("@{account_filter} 계좌에 종목이 없습니다.");
+        }
+    }
+
     let now = kst_now().format("%Y-%m-%d %H:%M").to_string();
-    let mut msg = format!("📊 포트폴리오 현황\n{now} 기준\n");
+    let acct_label = if account_filter.is_empty() { String::new() } else { format!(" [@{}]", account_filter) };
+    let mut msg = format!("📊 포트폴리오 현황{acct_label}\n{now} 기준\n");
 
     let usd_krw = api.get_exchange_rate().await.unwrap_or(1350.0);
 
