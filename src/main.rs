@@ -61,6 +61,9 @@ async fn main() {
         if config.kis_api.app_secret.is_empty() || config.kis_api.app_secret.starts_with("YOUR_") {
             missing.push("kis_api.app_secret");
         }
+        if config.kis_api.hts_id.is_empty() || config.kis_api.hts_id.starts_with("YOUR_") {
+            missing.push("kis_api.hts_id");
+        }
         if !missing.is_empty() {
             eprintln!("필수 설정이 누락되었습니다. {config_path} 를 수정하세요:");
             for field in missing {
