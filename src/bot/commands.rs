@@ -64,7 +64,7 @@ fn help_text() -> String {
     "📋 명령어 목록\n\n\
      포트폴리오:\n\
      /port add [마켓] [종목코드] [수량] [매입가] [종목명] [@계좌]\n\
-     /port remove [종목코드] [@계좌]\n\
+     /port remove [종목코드|*] [@계좌]\n\
      /port edit [종목코드] [수량] [매입가] [@계좌]\n\
      /port list — 전체 포트폴리오\n\
      /port info [종목코드] [@계좌] — 종목 상세\n\
@@ -127,7 +127,7 @@ async fn cmd_port(user_id: i64, args: &str, api: &ApiHandle) -> String {
         Some("summary") => cmd_summary(user_id, api).await,
         _ => "사용법:\n\
               /port add [마켓] [종목코드] [수량] [매입가] [종목명] [@계좌]\n\
-              /port remove [종목코드] [@계좌]\n\
+              /port remove [종목코드|*] [@계좌]\n\
               /port edit [종목코드] [수량] [매입가] [@계좌]\n\
               /port list\n\
               /port info [종목코드] [@계좌]\n\
@@ -204,7 +204,45 @@ fn cmd_remove(user_id: i64, args: &str) -> String {
     let (parts, account) = extract_account(&raw);
     let symbol = parts.first().copied().unwrap_or("").trim();
     if symbol.is_empty() {
-        return "사용법: /port remove [종목코드] [@계좌]".to_string();
+        return "사용법: /port remove [종목코드|*] [@계좌]".to_string();
+    }
+
+    // * 와일드카드: 전체 삭제 (계좌 지정 시 해당 계좌만)
+    if symbol == "*" {
+        let mut store = storage::load_portfolio(user_id);
+        let before = store.holdings.len();
+        if account.is_empty() {
+            store.holdings.clear();
+        } else {
+            store.holdings.retain(|h| h.account != account);
+        }
+        let removed = before - store.holdings.len();
+        if removed == 0 {
+            return if account.is_empty() {
+                "삭제할 종목이 없습니다.".to_string()
+            } else {
+                format!("{} 에 삭제할 종목이 없습니다.", account_tag(&account))
+            };
+        }
+        if let Err(e) = storage::save_portfolio(user_id, &store) {
+            return format!("저장 실패: {e:#}");
+        }
+        let mut signal_store = storage::load_signals(user_id);
+        let sig_before = signal_store.signals.len();
+        if account.is_empty() {
+            signal_store.signals.clear();
+        } else {
+            signal_store.signals.retain(|s| s.account != account);
+        }
+        let sig_removed = sig_before - signal_store.signals.len();
+        if sig_removed > 0 {
+            if let Err(e) = storage::save_signals(user_id, &signal_store) {
+                tracing::warn!("Failed to save signals after port remove * (user {}): {e:#}", user_id);
+            }
+        }
+        let sig_note = if sig_removed > 0 { format!(" (시그널 {}개 함께 삭제)", sig_removed) } else { String::new() };
+        let scope = if account.is_empty() { "전체".to_string() } else { format!("{} 계좌", account_tag(&account)) };
+        return format!("✅ {scope} 종목 {}개 삭제 완료{sig_note}", removed);
     }
 
     let mut store = storage::load_portfolio(user_id);

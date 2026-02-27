@@ -160,6 +160,13 @@ async fn main() {
 - **초당 20회 제한** (전체 API 합산)
 - 토큰 발급: **1분당 1회**, 유효기간 24시간
 
+### reqwest 클라이언트 설정 (ActorContext)
+| 설정 | 값 | 이유 |
+|---|---|---|
+| `connect_timeout` | 5s | TCP+TLS 연결 수립 타임아웃 |
+| `timeout` | 15s | 전체 요청(연결~응답 수신) 타임아웃 |
+| `pool_idle_timeout` | 55s | KIS API 서버는 idle connection을 ~60s 후 서버 측에서 종료함. 이보다 짧게 설정하여 stale connection 재사용 방지 ("connection closed before message completed" 오류 원인) |
+
 ### 공통 헤더
 ```
 Content-Type: application/json; charset=utf-8
