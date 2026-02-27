@@ -250,6 +250,7 @@ impl ApiHandle {
                     change_pct: bond.change_pct,
                 })
             }
+            Market::CART => anyhow::bail!("CART: 수동 관리 종목"),
         }
     }
 }

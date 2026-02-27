@@ -9,6 +9,7 @@ pub enum Market {
     NYS,
     AMS,
     BOND,
+    CART,
 }
 
 impl fmt::Display for Market {
@@ -19,6 +20,7 @@ impl fmt::Display for Market {
             Market::NYS => write!(f, "NYS"),
             Market::AMS => write!(f, "AMS"),
             Market::BOND => write!(f, "BOND"),
+            Market::CART => write!(f, "CART"),
         }
     }
 }
@@ -31,6 +33,7 @@ impl Market {
             "NYS" => Some(Market::NYS),
             "AMS" => Some(Market::AMS),
             "BOND" => Some(Market::BOND),
+            "CART" => Some(Market::CART),
             _ => None,
         }
     }
@@ -45,6 +48,8 @@ impl Market {
             Market::KRX | Market::BOND => hhmm >= 900 && hhmm <= 1530,
             // 미국 3개 거래소: 22:30~05:00 KST (자정 넘김)
             Market::NAS | Market::NYS | Market::AMS => hhmm >= 2230 || hhmm <= 500,
+            // CART: 수동 관리 — 시세 자동 조회 없음
+            Market::CART => false,
         }
     }
 
@@ -74,6 +79,7 @@ impl Market {
             Market::NYS  => "513",
             Market::AMS  => "529",
             Market::BOND => "302",
+            Market::CART => "",
         }
     }
 }
@@ -110,6 +116,8 @@ mod tests {
         assert_eq!(Market::from_str("nas"), Some(Market::NAS));
         assert_eq!(Market::from_str("Nys"), Some(Market::NYS));
         assert_eq!(Market::from_str("BOND"), Some(Market::BOND));
+        assert_eq!(Market::from_str("CART"), Some(Market::CART));
+        assert_eq!(Market::from_str("cart"), Some(Market::CART));
         assert_eq!(Market::from_str("INVALID"), None);
     }
 

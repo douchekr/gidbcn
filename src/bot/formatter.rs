@@ -74,7 +74,7 @@ pub fn format_holding_line_no_price(h: &Holding) -> String {
     let name = display_name(h);
     let acct = acct_tag(&h.account);
     match h.market {
-        Market::KRX => format!(
+        Market::KRX | Market::CART => format!(
             "• {} {}{} | {} | 매입 {} | 현재가: -",
             h.symbol, name, acct, fmt_qty(h), fmt_price_krx(h.avg_price)
         ),
@@ -104,7 +104,7 @@ pub fn format_holding_line(h: &Holding, price: &PriceData, _usd_krw: f64) -> Str
     let acct = acct_tag(&h.account);
 
     match h.market {
-        Market::KRX => format!(
+        Market::KRX | Market::CART => format!(
             "• {} {}{} | {} | {}→{} | {sign}{:.1}%",
             h.symbol, name, acct, fmt_qty(h),
             fmt_price_krx(h.avg_price), fmt_price_krx(price.current_price), pnl_pct
@@ -147,7 +147,7 @@ pub fn format_info(h: &Holding, price: &PriceData, signals: &[&Signal], usd_krw:
     let acct = acct_tag(&h.account);
 
     let mut msg = match h.market {
-        Market::KRX => format!(
+        Market::KRX | Market::CART => format!(
             "📈 {} {}{}\n현재가: {}원 (전일 대비 {sign}{:.1}%)\n매입가: {} × {}\n평가금액: {}원\n손익: {pnl_sign}{}원 ({pnl_sign}{:.1}%)",
             h.symbol, name, acct,
             fmt_price_krx(price.current_price), price.change_pct,

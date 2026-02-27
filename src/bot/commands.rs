@@ -122,7 +122,7 @@ fn help_text() -> String {
      /user add [chat_id] — 사용자 추가\n\
      /user remove [chat_id] — 사용자 삭제\n\
      /user list — 허용된 사용자 목록\n\n\
-     마켓: KRX, NAS, NYS, AMS, BOND\n\
+     마켓: KRX, NAS, NYS, AMS, BOND, CART\n\
      조건: > [가격], < [가격], > [수익률%], < [수익률%]\n\n\
      📂 계좌 구분 (@계좌):\n\
      동일 종목을 여러 계좌(IRP, 일반 등)에 나눠 보유할 때 사용.\n\
@@ -135,21 +135,36 @@ fn help_text() -> String {
      • 시그널 수익률 조건은 해당 계좌의 매입가 기준으로 계산\n\n\
      ※ BOND 수량/매입가 단위:\n\
        수량 = 액면가 1,000원 단위 (예: 50000 → 액면 5,000만원)\n\
-       매입가 = 10,000원 액면 기준 가격 (예: 7435)"
+       매입가 = 10,000원 액면 기준 가격 (예: 7435)\n\n\
+     ※ CART (수동 관리):\n\
+       /port add CART 비트코인 2 50000000 @코인 =55000000\n\
+       /port edit 비트코인 2 50000000 =55000000 @코인\n\
+       이름=종목코드. =현재가·@계좌는 순서 자유. 생략 시 매입가 사용.\n\
+       시세 자동 조회·시그널 불가."
         .to_string()
 }
 
-/// args에서 @로 시작하는 토큰을 계좌명으로 추출, 나머지 반환
-fn extract_account<'a>(parts: &[&'a str]) -> (Vec<&'a str>, String) {
+/// args에서 @계좌, =현재가 프리픽스 토큰을 추출, 나머지 반환
+/// 순서 무관 — @, = 중 어떤 것이 먼저 와도 동일하게 파싱
+fn extract_options<'a>(parts: &[&'a str]) -> (Vec<&'a str>, String, Option<&'a str>) {
     let mut rest = Vec::new();
     let mut account = String::new();
+    let mut current_price_str: Option<&'a str> = None;
     for &p in parts {
         if let Some(a) = p.strip_prefix('@') {
             account = a.to_string();
+        } else if let Some(cp) = p.strip_prefix('=') {
+            current_price_str = Some(cp);
         } else {
             rest.push(p);
         }
     }
+    (rest, account, current_price_str)
+}
+
+/// @계좌만 추출 (=현재가 무시) — 대부분의 커맨드용
+fn extract_account<'a>(parts: &[&'a str]) -> (Vec<&'a str>, String) {
+    let (rest, account, _) = extract_options(parts);
     (rest, account)
 }
 
@@ -183,15 +198,21 @@ async fn cmd_port(user_id: i64, args: &str, api: &ApiHandle) -> String {
 
 async fn cmd_add(user_id: i64, args: &str, api: &ApiHandle) -> String {
     let raw: Vec<&str> = args.split_whitespace().collect();
-    let (parts, account) = extract_account(&raw);
+    let (parts, account, cp_str) = extract_options(&raw);
     if parts.len() < 4 {
         return "사용법: /port add [마켓] [종목코드] [수량] [매입가] [@계좌]\n예: /port add KRX 005930 10 70000 @IRP".to_string();
     }
 
     let market = match Market::from_str(parts[0]) {
         Some(m) => m,
-        None => return format!("알 수 없는 마켓: {}. (KRX/NAS/NYS/AMS/BOND)", parts[0]),
+        None => return format!("알 수 없는 마켓: {}. (KRX/NAS/NYS/AMS/BOND/CART)", parts[0]),
     };
+
+    let is_cart = market == Market::CART;
+    if !is_cart && cp_str.is_some() {
+        return "=현재가는 CART 마켓 종목만 사용할 수 있습니다.".to_string();
+    }
+
     let symbol = parts[1].to_string();
     let quantity: f64 = match parts[2].parse() {
         Ok(v) => v,
@@ -202,11 +223,25 @@ async fn cmd_add(user_id: i64, args: &str, api: &ApiHandle) -> String {
         Err(_) => return "매입가는 숫자여야 합니다.".to_string(),
     };
 
-    // 종목명 API 조회 (실패 시 존재하지 않는 종목으로 판단)
-    let name = match api.get_stock_name(market, &symbol).await {
-        Ok(n) if !n.is_empty() => n,
-        Ok(_) => return format!("종목을 찾을 수 없습니다: {symbol}"),
-        Err(e) => return format!("종목 조회 실패: {symbol} ({e:#})"),
+    // CART: =현재가 프리픽스 파싱 (생략 시 매입가) + 종목명 = symbol
+    let (name, cached_price, cached_at) = if is_cart {
+        let cp = if let Some(s) = cp_str {
+            match s.parse::<f64>() {
+                Ok(v) => v,
+                Err(_) => return "현재가는 숫자여야 합니다. (예: =55000000)".to_string(),
+            }
+        } else {
+            avg_price
+        };
+        (symbol.clone(), Some(cp), Some(kst_now()))
+    } else {
+        // 종목명 API 조회 (실패 시 존재하지 않는 종목으로 판단)
+        let n = match api.get_stock_name(market, &symbol).await {
+            Ok(n) if !n.is_empty() => n,
+            Ok(_) => return format!("종목을 찾을 수 없습니다: {symbol}"),
+            Err(e) => return format!("종목 조회 실패: {symbol} ({e:#})"),
+        };
+        (n, None, None)
     };
 
     let mut store = storage::load_portfolio(user_id);
@@ -222,15 +257,15 @@ async fn cmd_add(user_id: i64, args: &str, api: &ApiHandle) -> String {
         quantity,
         avg_price,
         added_at: kst_now(),
-        cached_price: None,
-        cached_at: None,
+        cached_price,
+        cached_at,
     });
 
     if let Err(e) = storage::save_portfolio(user_id, &store) {
         return format!("저장 실패: {e:#}");
     }
 
-    let name_part = if name.is_empty() { String::new() } else { format!(" {name}") };
+    let name_part = if name.is_empty() || name == symbol { String::new() } else { format!(" {name}") };
     format!("✅ {symbol}{name_part} ({market}){} 추가 완료", account_tag(&account))
 }
 
@@ -330,9 +365,9 @@ fn cmd_remove(user_id: i64, args: &str) -> String {
 
 fn cmd_edit(user_id: i64, args: &str) -> String {
     let raw: Vec<&str> = args.split_whitespace().collect();
-    let (parts, account) = extract_account(&raw);
+    let (parts, account, cp_str) = extract_options(&raw);
     if parts.len() < 3 {
-        return "사용법: /port edit [종목코드] [수량] [매입가] [@계좌]".to_string();
+        return "사용법: /port edit [종목코드] [수량] [매입가] [@계좌] [=현재가]".to_string();
     }
 
     let symbol = parts[0];
@@ -369,11 +404,29 @@ fn cmd_edit(user_id: i64, args: &str) -> String {
     holding.quantity = quantity;
     holding.avg_price = avg_price;
 
+    // =현재가 프리픽스로 현재가 갱신 (CART 마켓 전용)
+    let price_updated = if let Some(s) = cp_str {
+        if holding.market != Market::CART {
+            return "=현재가는 CART 마켓 종목만 사용할 수 있습니다.".to_string();
+        }
+        match s.parse::<f64>() {
+            Ok(cp) => {
+                holding.cached_price = Some(cp);
+                holding.cached_at = Some(kst_now());
+                true
+            }
+            Err(_) => return "현재가는 숫자여야 합니다. (예: =55000000)".to_string(),
+        }
+    } else {
+        false
+    };
+
     if let Err(e) = storage::save_portfolio(user_id, &store) {
         return format!("저장 실패: {e:#}");
     }
 
-    format!("✅ {symbol}{} 수정 완료 (수량: {quantity}, 매입가: {avg_price})", account_tag(&account))
+    let price_note = if price_updated { format!(", 현재가: {}", cp_str.unwrap()) } else { String::new() };
+    format!("✅ {symbol}{} 수정 완료 (수량: {quantity}, 매입가: {avg_price}{price_note})", account_tag(&account))
 }
 
 async fn cmd_list(user_id: i64, args: &str, api: &ApiHandle) -> String {
@@ -402,6 +455,7 @@ async fn cmd_list(user_id: i64, args: &str, api: &ApiHandle) -> String {
     let mut domestic = Vec::new();
     let mut overseas = Vec::new();
     let mut bonds = Vec::new();
+    let mut etc = Vec::new();
     let mut holdings_updated = false;
     let mut total_eval = 0.0f64;
     let mut total_cost = 0.0f64;
@@ -410,14 +464,26 @@ async fn cmd_list(user_id: i64, args: &str, api: &ApiHandle) -> String {
     let mut failed_symbols: Vec<String> = Vec::new();
 
     for h in &mut store.holdings {
-        match api.get_price_for_market(h.market, &h.symbol).await {
+        // CART: API 호출 없이 cached_price 직접 사용
+        let price_result = if h.market == Market::CART {
+            match h.cached_price {
+                Some(cp) => Ok(PriceData { name: h.name.clone(), current_price: cp, change_pct: 0.0 }),
+                None => Err(anyhow::anyhow!("현재가 미설정")),
+            }
+        } else {
+            api.get_price_for_market(h.market, &h.symbol).await
+        };
+
+        match price_result {
             Ok(price) => {
                 if h.name.is_empty() && !price.name.is_empty() {
                     h.name = price.name.clone();
                 }
-                h.cached_price = Some(price.current_price);
-                h.cached_at = Some(kst_now());
-                holdings_updated = true;
+                if h.market != Market::CART {
+                    h.cached_price = Some(price.current_price);
+                    h.cached_at = Some(kst_now());
+                    holdings_updated = true;
+                }
                 let factor = h.market.value_factor();
                 let eval = price.current_price * h.quantity * factor;
                 let cost = h.avg_price * h.quantity * factor;
@@ -437,10 +503,13 @@ async fn cmd_list(user_id: i64, args: &str, api: &ApiHandle) -> String {
                     Market::KRX => domestic.push(line),
                     Market::NAS | Market::NYS | Market::AMS => overseas.push(line),
                     Market::BOND => bonds.push(line),
+                    Market::CART => etc.push(line),
                 }
             }
             Err(e) => {
-                tracing::warn!("Failed to get price for {}: {e:#}", h.symbol);
+                if h.market != Market::CART {
+                    tracing::warn!("Failed to get price for {}: {e:#}", h.symbol);
+                }
                 if let (Some(cp), Some(_)) = (h.cached_price, h.cached_at) {
                     // 캐시 가격 사용
                     let cached_price_data = PriceData {
@@ -468,6 +537,7 @@ async fn cmd_list(user_id: i64, args: &str, api: &ApiHandle) -> String {
                         Market::KRX => domestic.push(line),
                         Market::NAS | Market::NYS | Market::AMS => overseas.push(line),
                         Market::BOND => bonds.push(line),
+                        Market::CART => etc.push(line),
                     }
                 } else {
                     failed_symbols.push(h.symbol.clone());
@@ -476,6 +546,7 @@ async fn cmd_list(user_id: i64, args: &str, api: &ApiHandle) -> String {
                         Market::KRX => domestic.push(line),
                         Market::NAS | Market::NYS | Market::AMS => overseas.push(line),
                         Market::BOND => bonds.push(line),
+                        Market::CART => etc.push(line),
                     }
                 }
             }
@@ -499,6 +570,10 @@ async fn cmd_list(user_id: i64, args: &str, api: &ApiHandle) -> String {
     if !bonds.is_empty() {
         msg.push_str("\n\n🏛 채권\n");
         msg.push_str(&bonds.join("\n"));
+    }
+    if !etc.is_empty() {
+        msg.push_str("\n\n🏷 기타\n");
+        msg.push_str(&etc.join("\n"));
     }
 
     if has_price {
@@ -550,7 +625,16 @@ async fn cmd_info(user_id: i64, args: &str, api: &ApiHandle) -> String {
 
     let signal_store = storage::load_signals(user_id);
     let market = store.holdings[indices[0]].market;
-    let price_result = api.get_price_for_market(market, &symbol).await;
+
+    // CART: API 호출 없이 cached_price 직접 사용
+    let price_result = if market == Market::CART {
+        match store.holdings[indices[0]].cached_price {
+            Some(cp) => Ok(PriceData { name: store.holdings[indices[0]].name.clone(), current_price: cp, change_pct: 0.0 }),
+            None => Err(anyhow::anyhow!("현재가 미설정")),
+        }
+    } else {
+        api.get_price_for_market(market, &symbol).await
+    };
 
     let usd_krw = if matches!(market, Market::NAS | Market::NYS | Market::AMS) {
         api.get_exchange_rate().await.unwrap_or(1350.0)
@@ -559,12 +643,14 @@ async fn cmd_info(user_id: i64, args: &str, api: &ApiHandle) -> String {
     };
 
     if let Ok(ref price) = price_result {
-        for &idx in &indices {
-            store.holdings[idx].cached_price = Some(price.current_price);
-            store.holdings[idx].cached_at = Some(kst_now());
-        }
-        if let Err(e) = storage::save_portfolio(user_id, &store) {
-            tracing::warn!("Failed to save cache for {symbol}: {e:#}");
+        if market != Market::CART {
+            for &idx in &indices {
+                store.holdings[idx].cached_price = Some(price.current_price);
+                store.holdings[idx].cached_at = Some(kst_now());
+            }
+            if let Err(e) = storage::save_portfolio(user_id, &store) {
+                tracing::warn!("Failed to save cache for {symbol}: {e:#}");
+            }
         }
     }
 
@@ -622,6 +708,7 @@ async fn cmd_summary(user_id: i64, api: &ApiHandle) -> String {
     let mut domestic_val = 0.0f64;
     let mut overseas_val = 0.0f64;
     let mut bond_val = 0.0f64;
+    let mut etc_val = 0.0f64;
     let mut total_cost = 0.0f64;
     let mut has_cached = false;
     let mut portfolio_updated = false;
@@ -630,21 +717,33 @@ async fn cmd_summary(user_id: i64, api: &ApiHandle) -> String {
     for h in store.holdings.iter_mut() {
         let market = h.market;
         let symbol = h.symbol.clone();
-        let current_price = match api.get_price_for_market(market, &symbol).await {
-            Ok(p) => {
-                h.cached_price = Some(p.current_price);
-                h.cached_at = Some(kst_now());
-                portfolio_updated = true;
-                p.current_price
-            }
-            Err(e) => {
-                tracing::warn!("Summary: failed to get price for {symbol}: {e:#}");
-                if let Some(cp) = h.cached_price {
-                    has_cached = true;
-                    cp
-                } else {
+
+        // CART: API 호출 없이 cached_price 직접 사용
+        let current_price = if market == Market::CART {
+            match h.cached_price {
+                Some(cp) => cp,
+                None => {
                     failed_symbols.push(symbol);
                     continue;
+                }
+            }
+        } else {
+            match api.get_price_for_market(market, &symbol).await {
+                Ok(p) => {
+                    h.cached_price = Some(p.current_price);
+                    h.cached_at = Some(kst_now());
+                    portfolio_updated = true;
+                    p.current_price
+                }
+                Err(e) => {
+                    tracing::warn!("Summary: failed to get price for {symbol}: {e:#}");
+                    if let Some(cp) = h.cached_price {
+                        has_cached = true;
+                        cp
+                    } else {
+                        failed_symbols.push(symbol);
+                        continue;
+                    }
                 }
             }
         };
@@ -665,6 +764,10 @@ async fn cmd_summary(user_id: i64, api: &ApiHandle) -> String {
                 bond_val += eval;
                 total_cost += cost;
             }
+            Market::CART => {
+                etc_val += eval;
+                total_cost += cost;
+            }
         }
     }
 
@@ -674,7 +777,7 @@ async fn cmd_summary(user_id: i64, api: &ApiHandle) -> String {
         }
     }
 
-    let total = domestic_val + overseas_val + bond_val;
+    let total = domestic_val + overseas_val + bond_val + etc_val;
     if total == 0.0 && !failed_symbols.is_empty() {
         return format!(
             "⚠️ 시세 조회에 실패했습니다.\n실패 종목: {}",
@@ -705,12 +808,14 @@ async fn cmd_summary(user_id: i64, api: &ApiHandle) -> String {
          🇰🇷 국내: {}원 ({})\n\
          🇺🇸 미국: {}원 ({})\n\
          🏛 채권: {}원 ({})\n\
+         🏷 기타: {}원 ({})\n\
          ──────────\n\
          💰 총 평가: {}원\n\
          💵 총 손익: {sign}{}원 ({sign}{:.1}%)",
         formatter::fmt_int(domestic_val), fmt_pct(domestic_val),
         formatter::fmt_int(overseas_val), fmt_pct(overseas_val),
         formatter::fmt_int(bond_val),     fmt_pct(bond_val),
+        formatter::fmt_int(etc_val),      fmt_pct(etc_val),
         formatter::fmt_int(total),
         formatter::fmt_int(pnl),
         pnl_pct,
@@ -759,14 +864,18 @@ fn cmd_signal(user_id: i64, args: &str) -> String {
             };
             // 포트폴리오에 해당 종목(+계좌)이 있는지 확인
             let portfolio = storage::load_portfolio(user_id);
-            let in_portfolio = portfolio.holdings.iter().any(|h| {
+            let holding = portfolio.holdings.iter().find(|h| {
                 h.symbol == symbol && (account.is_empty() || h.account == account)
             });
-            if !in_portfolio {
-                return format!(
+            match holding {
+                None => return format!(
                     "{symbol}{} 이(가) 포트폴리오에 없습니다. /port add 로 먼저 추가하세요.",
                     account_tag(&account)
-                );
+                ),
+                Some(h) if h.market == Market::CART => {
+                    return "CART 종목에는 시그널을 설정할 수 없습니다. (자동 시세 조회 불가)".to_string();
+                }
+                _ => {}
             }
             let mut store = storage::load_signals(user_id);
             store.signals.push(Signal {

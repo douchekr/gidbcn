@@ -294,7 +294,7 @@ custtype: P
 }
 ```
 - 최상위 키: Telegram user_id (문자열)
-- market: `KRX` | `NAS` | `NYS` | `AMS` | `BOND`
+- market: `KRX` | `NAS` | `NYS` | `AMS` | `BOND` | `CART`
 - `name`: 시세 조회 시 API에서 자동 캐싱. `/port add` 시 직접 입력 가능.
 - `cached_price` / `cached_at`: 마지막 성공 조회 가격. 조회 실패 시 폴백용. `⏱` 마커로 표시.
 - **BOND 전용**: `quantity` = 액면가 1,000원 단위, `avg_price`/`cached_price` = 10,000원 액면 기준 가격
@@ -341,6 +341,7 @@ custtype: P
 | 명령어 | 설명 |
 |---|---|
 | `/port add [마켓] [종목코드] [수량] [매입가] [@계좌]` | 종목 추가 (종목명 API 자동 조회, 실패 시 거부) |
+| `/port add CART [이름] [수량] [매입가] [@계좌] [현재가]` | CART 종목 추가 (이름=종목코드, 현재가 수동 입력) |
 | `/port remove [종목코드]` | 종목 삭제 |
 | `/port edit [종목코드] [수량] [매입가]` | 종목 수정 |
 | `/port list [@계좌]` | 전체 포트폴리오 + 현재가 + 손익 (계좌별 필터 가능) |
@@ -384,6 +385,7 @@ custtype: P
 | `NYS` | `EXCD=NYS` | 뉴욕 |
 | `AMS` | `EXCD=AMS` | 아멕스 |
 | `BOND` | `FID_COND_MRKT_DIV_CODE=B` | 채권 별도 엔드포인트 |
+| `CART` | - | 수동 관리 (시세 조회 없음) |
 
 ---
 
@@ -429,7 +431,7 @@ uuid = { version = "1", features = ["v4"] }
 | 메서드 | 역할 |
 |---|---|
 | `Market::from_str(s)` | 문자열 → Market (대소문자 무관) |
-| `Market::is_open_now()` | KST 현재 시각 기준 장중 여부 |
+| `Market::is_open_now()` | KST 현재 시각 기준 장중 여부. CART → 항상 false |
 | `Market::exchange_code()` | 해외주식 EXCD 코드 (NAS/NYS/AMS만 반환) |
 | `Market::value_factor()` | 평가금액 보정계수. BOND=0.1, 나머지=1.0 |
 | `Market::product_type_code()` | 상품기본조회 PRDT_TYPE_CD. KRX=300, NAS=512, NYS=513, AMS=529, BOND=302 |
@@ -449,6 +451,7 @@ uuid = { version = "1", features = ["v4"] }
 9. **입력 정규화**: 종목코드·마켓코드 대문자 변환은 `cmd_port`/`cmd_signal` 진입점에서 `rest.to_uppercase()` 1회 적용. 개별 서브커맨드에서 중복 변환 금지.
 10. **종목명**: `/port add` 시 API 자동 조회 전용 (수동 입력 불가). 조회 실패 = 추가 거부.
 11. **비커맨드 메시지**: `Dispatcher::default_handler(|_| async {})` — 슬래시 없는 일반 메시지는 디스패처 레벨에서 무시.
+12. **CART 마켓**: 수동 관리 종목. API 시세 조회 없음. `is_open_now()` → false. 시그널 설정 불허. `cached_price`를 현재가로 직접 사용. `/port add CART [이름] [수량] [매입가] [@계좌] [현재가]`.
 
 ---
 
@@ -485,12 +488,15 @@ uuid = { version = "1", features = ["v4"] }
 🏛 채권
 • KR103502G990 국고01125-3909(19-6) | 50,000 | 7,435→7,485 | +0.7%
 
+🏷 기타
+• 비트코인 비트코인 [@코인] | 2 | 50,000,000→55,000,000 | +10.0%
+
 ──────────
 💰 총 평가: 145,234,500원
 💵 총 손익: +1,234,500원 (+0.9%)
 💱 USD/KRW: 1,450
 ```
-- 총 평가 = KRX원화 + 채권원화 + (미국달러 × usd_krw)
+- 총 평가 = KRX원화 + 채권원화 + CART원화 + (미국달러 × usd_krw)
 - `💱 USD/KRW` 줄: 미국 종목이 있을 때만 표시
 - `⏱` 마커: 직전 캐시 가격 사용 (실시간 조회 실패 시)
 
@@ -523,6 +529,7 @@ uuid = { version = "1", features = ["v4"] }
 🇰🇷 국내: 69,521,000원 (65%)
 🇺🇸 미국: 26,467,000원 (25%)
 🏛 채권: 37,425,000원 (35%)
+🏷 기타: 110,000,000원 (...)
 ──────────
 💰 총 평가: 133,413,000원
 💵 총 손익: +3,234,500원 (+2.5%)
