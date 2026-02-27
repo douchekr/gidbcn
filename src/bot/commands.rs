@@ -33,7 +33,6 @@ pub async fn handle_command(
     msg: Message,
     cmd: Command,
     api: ApiHandle,
-    owner_chat_id: i64,
 ) -> ResponseResult<()> {
     let chat_id = msg.chat.id;
 
@@ -44,6 +43,11 @@ pub async fn handle_command(
             return Ok(());
         }
     };
+
+    // config에서 매번 최신 owner_chat_id 로드 (오너 자동 등록 후 즉시 반영)
+    let owner_chat_id = crate::config::Config::load(storage::CONFIG_PATH)
+        .map(|c| c.telegram.owner_chat_id)
+        .unwrap_or(0);
 
     // 접근 제어
     let effective_owner = if owner_chat_id == 0 {
