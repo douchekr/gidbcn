@@ -133,19 +133,22 @@ gidbcn/
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    // 1. config 로드 (없으면 템플릿 생성 후 종료)
+    // 1. config 로드 (없으면 템플릿 생성 후 종료 / 파싱 실패 시 오류 출력)
     let config = Config::load(storage::CONFIG_PATH)?;
 
-    // 2. API Actor 채널 생성 + spawn
+    // 2. 필수 설정 검증: bot_token, app_key, app_secret, hts_id 누락 시 종료
+    //    (값이 비어있거나 "YOUR_"로 시작하면 미설정으로 판단)
+
+    // 3. API Actor 채널 생성 + spawn
     let (api_tx, api_rx) = mpsc::channel::<ApiRequest>(32);
     let api_handle = ApiHandle::new(api_tx);
     tokio::spawn(run_api_actor(api_rx, config.clone()));
 
-    // 3. 스케줄러 spawn (bot 인스턴스 공유)
+    // 4. 스케줄러 spawn (bot 인스턴스 공유)
     let tg_bot = Bot::new(&config.telegram.bot_token);
     tokio::spawn(run_scheduler(api_handle.clone(), config.scheduler.clone(), tg_bot.clone()));
 
-    // 4. 텔레그램 봇 실행 (메인 태스크, block)
+    // 5. 텔레그램 봇 실행 (메인 태스크, block)
     run_bot(config.telegram, api_handle).await;
 }
 ```
@@ -355,7 +358,7 @@ custtype: P
 | `/user remove [chat_id]` | 사용자 삭제 |
 | `/user list` | 허용된 사용자 목록 |
 
-- `config.json`의 `telegram.owner_chat_id`가 0이면 봇이 chat_id를 안내하고 모든 명령 차단
+- `telegram.owner_chat_id == 0`: 첫 명령 발신자를 오너로 자동 등록 후 config.json 저장
 - owner는 항상 허용. 추가 허용 유저 목록은 `config.json`의 `telegram.users`에 저장
 - 미허용 유저가 명령 시 `"접근 권한이 없습니다. (chat_id: xxx)"` 응답 → owner가 필요 시 추가 가능
 
