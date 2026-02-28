@@ -90,7 +90,7 @@ pub fn format_holding_line_no_price(h: &Holding) -> String {
 }
 
 pub fn format_holding_line(h: &Holding, price: &PriceData, _usd_krw: f64) -> String {
-    let pnl_pct = if h.avg_price > 0.0 {
+    let pnl_pct = if h.quantity > 0.0 && h.avg_price > 0.0 {
         (price.current_price - h.avg_price) / h.avg_price * 100.0
     } else {
         0.0
@@ -131,7 +131,7 @@ pub fn format_holding_line_cached(h: &Holding, price: &PriceData, usd_krw: f64) 
 pub fn format_info(h: &Holding, price: &PriceData, signals: &[&Signal], usd_krw: f64) -> String {
     let factor = h.market.value_factor();
     let pnl = (price.current_price - h.avg_price) * h.quantity * factor;
-    let pnl_pct = if h.avg_price > 0.0 {
+    let pnl_pct = if h.quantity > 0.0 && h.avg_price > 0.0 {
         (price.current_price - h.avg_price) / h.avg_price * 100.0
     } else {
         0.0
