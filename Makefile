@@ -23,7 +23,7 @@ test:
 #             rustup target add $(TARGET)
 #   빌드:     make build-pi USE_CROSS=0
 #
-USE_CROSS ?= 1
+USE_CROSS ?= 0
 
 # ring crate의 C/어셈블리 빌드에 필요한 ARM C 컴파일러 지정
 # cross(방법 A)는 Docker 컨테이너에서 자동 처리되므로 불필요
