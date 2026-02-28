@@ -44,6 +44,60 @@ mod tests {
     }
 
     #[test]
+    fn condition_all_variants_serde() {
+        let cases = vec![
+            (Condition::PriceAbove { target: 100.0 }, "price_above"),
+            (Condition::PriceBelow { target: 50.0 }, "price_below"),
+            (Condition::ProfitAbove { percentage: 10.0 }, "profit_above"),
+            (Condition::ProfitBelow { percentage: -5.0 }, "profit_below"),
+        ];
+        for (cond, expected_tag) in cases {
+            let json = serde_json::to_string(&cond).unwrap();
+            assert!(json.contains(expected_tag), "missing tag {expected_tag} in {json}");
+            let parsed: Condition = serde_json::from_str(&json).unwrap();
+            let re_json = serde_json::to_string(&parsed).unwrap();
+            assert_eq!(json, re_json);
+        }
+    }
+
+    #[test]
+    fn signal_serde_with_account() {
+        let kst = chrono::FixedOffset::east_opt(9 * 3600).unwrap();
+        let sig = Signal {
+            id: "abc".into(),
+            symbol: "005930".into(),
+            account: "IRP".into(),
+            condition: Condition::PriceAbove { target: 80000.0 },
+            active: true,
+            created_at: chrono::Utc::now().with_timezone(&kst),
+        };
+        let json = serde_json::to_string(&sig).unwrap();
+        assert!(json.contains("\"account\":\"IRP\""));
+        let parsed: Signal = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.account, "IRP");
+    }
+
+    #[test]
+    fn signal_serde_empty_account_skipped() {
+        let kst = chrono::FixedOffset::east_opt(9 * 3600).unwrap();
+        let sig = Signal {
+            id: "abc".into(),
+            symbol: "005930".into(),
+            account: String::new(),
+            condition: Condition::PriceBelow { target: 60000.0 },
+            active: false,
+            created_at: chrono::Utc::now().with_timezone(&kst),
+        };
+        let json = serde_json::to_string(&sig).unwrap();
+        // empty account → JSON에서 생략
+        assert!(!json.contains("account"));
+        // 역직렬화 시 default로 복원
+        let parsed: Signal = serde_json::from_str(&json).unwrap();
+        assert!(parsed.account.is_empty());
+        assert!(!parsed.active);
+    }
+
+    #[test]
     fn signal_store_default_empty() {
         let store = SignalStore::default();
         assert!(store.signals.is_empty());

@@ -367,4 +367,134 @@ mod tests {
             "수익률 ≤ -10%"
         );
     }
+
+    #[test]
+    fn format_condition_bond() {
+        assert_eq!(
+            format_condition(&Condition::PriceBelow { target: 9500.0 }, &Market::BOND),
+            "가격 ≤ 9,500"
+        );
+    }
+
+    #[test]
+    fn format_holding_line_cached_marker() {
+        let h = make_holding(Market::KRX, "005930", 10.0, 70000.0);
+        let p = make_price("삼성전자", 72500.0, 0.0);
+        let line = format_holding_line_cached(&h, &p, 1350.0);
+        assert!(line.ends_with('⏱'));
+        assert!(line.contains("70,000→72,500"));
+    }
+
+    #[test]
+    fn format_holding_line_with_account() {
+        let mut h = make_holding(Market::KRX, "005930", 10.0, 70000.0);
+        h.account = "IRP".into();
+        let p = make_price("삼성전자", 72500.0, 1.2);
+        let line = format_holding_line(&h, &p, 1350.0);
+        assert!(line.contains("[@IRP]"));
+    }
+
+    #[test]
+    fn format_holding_line_cart() {
+        let mut h = make_holding(Market::CART, "비트코인", 2.0, 50000000.0);
+        h.name = "비트코인".into();
+        let p = make_price("비트코인", 55000000.0, 0.0);
+        let line = format_holding_line(&h, &p, 0.0);
+        assert!(line.contains("비트코인"));
+        assert!(line.contains("50,000,000→55,000,000"));
+        assert!(!line.contains("$")); // CART는 원화
+    }
+
+    #[test]
+    fn format_no_price_us() {
+        let h = make_holding(Market::NAS, "TSLA", 5.0, 180.5);
+        let line = format_holding_line_no_price(&h);
+        assert!(line.contains("$180.50"));
+        assert!(line.contains("현재가: -"));
+    }
+
+    #[test]
+    fn format_holding_line_negative_pnl() {
+        let h = make_holding(Market::KRX, "005930", 10.0, 70000.0);
+        let p = make_price("삼성전자", 65000.0, -2.5);
+        let line = format_holding_line(&h, &p, 1350.0);
+        assert!(line.contains("-7.1%"));
+    }
+
+    #[test]
+    fn format_info_krx() {
+        let h = make_holding(Market::KRX, "005930", 10.0, 70000.0);
+        let p = make_price("삼성전자", 72500.0, 1.2);
+        let msg = format_info(&h, &p, &[], 0.0);
+        assert!(msg.contains("72,500원"));
+        assert!(msg.contains("70,000 × 10"));
+        assert!(msg.contains("725,000원")); // 평가금액
+        assert!(msg.contains("+25,000원")); // 손익
+        assert!(!msg.contains("USD/KRW"));
+        assert!(!msg.contains("⚡")); // 시그널 없음
+    }
+
+    #[test]
+    fn format_info_us() {
+        let h = make_holding(Market::NAS, "TSLA", 5.0, 180.5);
+        let p = make_price("테슬라", 195.2, 2.0);
+        let msg = format_info(&h, &p, &[], 1450.0);
+        assert!(msg.contains("$195.20"));
+        assert!(msg.contains("$180.50 × 5"));
+        assert!(msg.contains("$976.00")); // eval
+        assert!(msg.contains("USD/KRW"));
+        assert!(msg.contains("1,450"));
+    }
+
+    #[test]
+    fn format_info_bond() {
+        let h = make_holding(Market::BOND, "KR103502G990", 50000.0, 7435.0);
+        let p = make_price("국고01125", 7485.0, 0.5);
+        let msg = format_info(&h, &p, &[], 0.0);
+        assert!(msg.contains("7,485원")); // 현재가
+        assert!(msg.contains("7,435 × 50,000")); // 매입가 × 수량
+        // 평가금액: 7485 * 50000 * 0.1 = 37,425,000
+        assert!(msg.contains("37,425,000원"));
+    }
+
+    #[test]
+    fn format_info_with_signals() {
+        use crate::models::signal::Signal;
+        let h = make_holding(Market::KRX, "005930", 10.0, 70000.0);
+        let p = make_price("삼성전자", 72500.0, 1.2);
+        let kst = FixedOffset::east_opt(9 * 3600).unwrap();
+        let sig = Signal {
+            id: "test".into(),
+            symbol: "005930".into(),
+            account: String::new(),
+            condition: Condition::PriceAbove { target: 80000.0 },
+            active: true,
+            created_at: Utc::now().with_timezone(&kst),
+        };
+        let signals: Vec<&Signal> = vec![&sig];
+        let msg = format_info(&h, &p, &signals, 0.0);
+        assert!(msg.contains("⚡ 설정된 시그널:"));
+        assert!(msg.contains("가격 ≥ 80,000"));
+    }
+
+    #[test]
+    fn format_alert_with_account() {
+        let msg = format_signal_alert(&Market::KRX, "005930", "삼성전자", "IRP", "가격 ≥ 80,000", 80500.0, 1.2, None);
+        assert!(msg.contains("[@IRP]"));
+    }
+
+    #[test]
+    fn fmt_price_dispatching() {
+        assert_eq!(fmt_price(&Market::KRX, 70000.0), "70,000");
+        assert_eq!(fmt_price(&Market::NAS, 195.2), "$195.20");
+        assert_eq!(fmt_price(&Market::NYS, 195.2), "$195.20");
+        assert_eq!(fmt_price(&Market::AMS, 195.2), "$195.20");
+        assert_eq!(fmt_price(&Market::BOND, 9850.0), "9,850");
+        assert_eq!(fmt_price(&Market::CART, 55000000.0), "55,000,000");
+    }
+
+    #[test]
+    fn fmt_dec2_negative() {
+        assert_eq!(fmt_dec2(-73.5), "-73.50");
+    }
 }

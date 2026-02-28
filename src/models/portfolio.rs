@@ -130,6 +130,38 @@ mod tests {
     }
 
     #[test]
+    fn market_value_factor() {
+        assert_eq!(Market::BOND.value_factor(), 0.1);
+        assert_eq!(Market::KRX.value_factor(), 1.0);
+        assert_eq!(Market::NAS.value_factor(), 1.0);
+        assert_eq!(Market::NYS.value_factor(), 1.0);
+        assert_eq!(Market::AMS.value_factor(), 1.0);
+        assert_eq!(Market::CART.value_factor(), 1.0);
+    }
+
+    #[test]
+    fn market_product_type_code() {
+        assert_eq!(Market::KRX.product_type_code(), "300");
+        assert_eq!(Market::NAS.product_type_code(), "512");
+        assert_eq!(Market::NYS.product_type_code(), "513");
+        assert_eq!(Market::AMS.product_type_code(), "529");
+        assert_eq!(Market::BOND.product_type_code(), "302");
+        assert_eq!(Market::CART.product_type_code(), "");
+    }
+
+    #[test]
+    fn market_display() {
+        assert_eq!(Market::KRX.to_string(), "KRX");
+        assert_eq!(Market::BOND.to_string(), "BOND");
+        assert_eq!(Market::CART.to_string(), "CART");
+    }
+
+    #[test]
+    fn market_cart_never_open() {
+        assert!(!Market::CART.is_open_now());
+    }
+
+    #[test]
     fn portfolio_serde_roundtrip() {
         let store = PortfolioStore {
             holdings: vec![Holding {
@@ -146,9 +178,35 @@ mod tests {
             }],
         };
         let json = serde_json::to_string(&store).unwrap();
+        // empty account → JSON에서 생략 (skip_serializing_if)
+        assert!(!json.contains("account"));
         let parsed: PortfolioStore = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.holdings.len(), 1);
         assert_eq!(parsed.holdings[0].symbol, "005930");
         assert_eq!(parsed.holdings[0].market, Market::KRX);
+    }
+
+    #[test]
+    fn portfolio_serde_with_account() {
+        let store = PortfolioStore {
+            holdings: vec![Holding {
+                market: Market::NAS,
+                symbol: "TSLA".into(),
+                name: "테슬라".into(),
+                account: "IRP".into(),
+                quantity: 5.0,
+                avg_price: 180.5,
+                added_at: chrono::Utc::now()
+                    .with_timezone(&chrono::FixedOffset::east_opt(9 * 3600).unwrap()),
+                cached_price: Some(195.2),
+                cached_at: None,
+            }],
+        };
+        let json = serde_json::to_string(&store).unwrap();
+        assert!(json.contains("\"account\":\"IRP\""));
+        assert!(json.contains("\"cached_price\":195.2"));
+        let parsed: PortfolioStore = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.holdings[0].account, "IRP");
+        assert_eq!(parsed.holdings[0].cached_price, Some(195.2));
     }
 }
