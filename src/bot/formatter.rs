@@ -1,6 +1,6 @@
 use crate::models::messages::PriceData;
 use crate::models::portfolio::{Holding, Market};
-use crate::models::signal::Signal;
+use crate::models::signal::{Condition, Signal};
 
 /// 정수를 3자리 콤마 포맷 (예: 70000 → "70,000")
 pub fn fmt_int(v: f64) -> String {
@@ -175,14 +175,24 @@ pub fn format_info(h: &Holding, price: &PriceData, signals: &[&Signal], usd_krw:
     if !signals.is_empty() {
         msg.push_str("\n\n⚡ 설정된 시그널:");
         for s in signals {
-            msg.push_str(&format!("\n• {} → 알림", s.condition.display_description()));
+            msg.push_str(&format!("\n• {} → 알림", format_condition(&s.condition, &h.market)));
         }
     }
 
     msg
 }
 
+pub fn format_condition(cond: &Condition, market: &Market) -> String {
+    match cond {
+        Condition::PriceAbove { target } => format!("가격 ≥ {}", fmt_price(market, *target)),
+        Condition::PriceBelow { target } => format!("가격 ≤ {}", fmt_price(market, *target)),
+        Condition::ProfitAbove { percentage } => format!("수익률 ≥ {percentage}%"),
+        Condition::ProfitBelow { percentage } => format!("수익률 ≤ {percentage}%"),
+    }
+}
+
 pub fn format_signal_alert(
+    market: &Market,
     symbol: &str,
     name: &str,
     account: &str,
@@ -197,7 +207,7 @@ pub fn format_signal_alert(
 
     let mut msg = format!(
         "🚨 시그널 발동!\n{}{}{}\n조건: {}\n현재가: {} ({sign}{:.1}%)",
-        symbol, name_part, acct, condition_desc, fmt_int(current_price), change_pct,
+        symbol, name_part, acct, condition_desc, fmt_price(market, current_price), change_pct,
     );
 
     if let Some(avg) = avg_price {
@@ -209,7 +219,7 @@ pub fn format_signal_alert(
         let ps = if profit_pct >= 0.0 { "+" } else { "" };
         msg.push_str(&format!(
             "\n\n💡 매입가: {} | 수익률: {ps}{:.1}%",
-            fmt_int(avg), profit_pct
+            fmt_price(market, avg), profit_pct
         ));
     }
 
@@ -314,8 +324,8 @@ mod tests {
     }
 
     #[test]
-    fn format_alert_with_avg_price() {
-        let msg = format_signal_alert("005930", "삼성전자", "", "가격 ≥ 80,000", 80500.0, 1.2, Some(70000.0));
+    fn format_alert_krx_with_avg_price() {
+        let msg = format_signal_alert(&Market::KRX, "005930", "삼성전자", "", "가격 ≥ 80,000", 80500.0, 1.2, Some(70000.0));
         assert!(msg.contains("시그널 발동"));
         assert!(msg.contains("삼성전자"));
         assert!(msg.contains("80,500"));
@@ -324,9 +334,37 @@ mod tests {
     }
 
     #[test]
+    fn format_alert_us_with_dollar() {
+        let msg = format_signal_alert(&Market::NAS, "TSLA", "테슬라", "", "가격 ≥ $200.00", 205.5, 3.0, Some(180.5));
+        assert!(msg.contains("$205.50"));
+        assert!(msg.contains("$180.50"));
+    }
+
+    #[test]
     fn format_alert_without_avg_price() {
-        let msg = format_signal_alert("TSLA", "", "", "가격 ≥ 200", 205.0, 3.0, None);
+        let msg = format_signal_alert(&Market::NAS, "TSLA", "", "", "가격 ≥ $200.00", 205.0, 3.0, None);
         assert!(msg.contains("TSLA"));
+        assert!(msg.contains("$205.00"));
         assert!(!msg.contains("매입가"));
+    }
+
+    #[test]
+    fn format_condition_krx() {
+        assert_eq!(
+            format_condition(&Condition::PriceAbove { target: 80000.0 }, &Market::KRX),
+            "가격 ≥ 80,000"
+        );
+    }
+
+    #[test]
+    fn format_condition_us() {
+        assert_eq!(
+            format_condition(&Condition::PriceAbove { target: 200.5 }, &Market::NAS),
+            "가격 ≥ $200.50"
+        );
+        assert_eq!(
+            format_condition(&Condition::ProfitBelow { percentage: -10.0 }, &Market::NAS),
+            "수익률 ≤ -10%"
+        );
     }
 }

@@ -401,32 +401,42 @@ fn cmd_edit(user_id: i64, args: &str) -> String {
         None => return format!("{symbol}{} 을(를) 찾을 수 없습니다.", account_tag(&account)),
     };
 
+    let market = holding.market;
     holding.quantity = quantity;
     holding.avg_price = avg_price;
 
     // =현재가 프리픽스로 현재가 갱신 (CART 마켓 전용)
-    let price_updated = if let Some(s) = cp_str {
-        if holding.market != Market::CART {
+    let cached_price_val = if let Some(s) = cp_str {
+        if market != Market::CART {
             return "=현재가는 CART 마켓 종목만 사용할 수 있습니다.".to_string();
         }
         match s.parse::<f64>() {
             Ok(cp) => {
                 holding.cached_price = Some(cp);
                 holding.cached_at = Some(kst_now());
-                true
+                Some(cp)
             }
             Err(_) => return "현재가는 숫자여야 합니다. (예: =55000000)".to_string(),
         }
     } else {
-        false
+        None
     };
 
     if let Err(e) = storage::save_portfolio(user_id, &store) {
         return format!("저장 실패: {e:#}");
     }
 
-    let price_note = if price_updated { format!(", 현재가: {}", cp_str.unwrap()) } else { String::new() };
-    format!("✅ {symbol}{} 수정 완료 (수량: {quantity}, 매입가: {avg_price}{price_note})", account_tag(&account))
+    let price_note = match cached_price_val {
+        Some(cp) => format!(", 현재가: {}", formatter::fmt_price(&market, cp)),
+        None => String::new(),
+    };
+    format!(
+        "✅ {symbol}{} 수정 완료 (수량: {}, 매입가: {}{})",
+        account_tag(&account),
+        formatter::fmt_quantity(quantity),
+        formatter::fmt_price(&market, avg_price),
+        price_note,
+    )
 }
 
 async fn cmd_list(user_id: i64, args: &str, api: &ApiHandle) -> String {
@@ -682,7 +692,7 @@ async fn cmd_info(user_id: i64, args: &str, api: &ApiHandle) -> String {
                 if !signals.is_empty() {
                     msg.push_str("\n\n⚡ 설정된 시그널:");
                     for s in &signals {
-                        msg.push_str(&format!("\n• {} → 알림", s.condition.display_description()));
+                        msg.push_str(&format!("\n• {} → 알림", formatter::format_condition(&s.condition, &h.market)));
                     }
                 }
                 if h.cached_price.is_some() {
@@ -867,7 +877,7 @@ fn cmd_signal(user_id: i64, args: &str) -> String {
             let holding = portfolio.holdings.iter().find(|h| {
                 h.symbol == symbol && (account.is_empty() || h.account == account)
             });
-            match holding {
+            let market = match holding {
                 None => return format!(
                     "{symbol}{} 이(가) 포트폴리오에 없습니다. /port add 로 먼저 추가하세요.",
                     account_tag(&account)
@@ -875,8 +885,8 @@ fn cmd_signal(user_id: i64, args: &str) -> String {
                 Some(h) if h.market == Market::CART => {
                     return "CART 종목에는 시그널을 설정할 수 없습니다. (자동 시세 조회 불가)".to_string();
                 }
-                _ => {}
-            }
+                Some(h) => h.market,
+            };
             let mut store = storage::load_signals(user_id);
             store.signals.push(Signal {
                 id: Uuid::new_v4().to_string(),
@@ -889,7 +899,7 @@ fn cmd_signal(user_id: i64, args: &str) -> String {
             if let Err(e) = storage::save_signals(user_id, &store) {
                 return format!("저장 실패: {e:#}");
             }
-            format!("✅ 시그널 설정 완료\n{symbol}{}: {}", account_tag(&account), condition.display_description())
+            format!("✅ 시그널 설정 완료\n{symbol}{}: {}", account_tag(&account), formatter::format_condition(&condition, &market))
         }
         _ => "사용법:\n\
               /signal add [종목코드] [> 또는 <] [값 또는 수익률%] [@계좌]\n\
@@ -913,10 +923,10 @@ fn cmd_signal_list(user_id: i64) -> String {
     let mut msg = "⚡ 시그널 목록\n".to_string();
     for (i, s) in store.signals.iter().enumerate() {
         let status = if s.active { "🟢" } else { "⚫" };
-        let name = portfolio.holdings.iter()
-            .find(|h| h.symbol == s.symbol && (s.account.is_empty() || h.account == s.account))
-            .map(|h| h.name.as_str())
-            .unwrap_or("");
+        let holding = portfolio.holdings.iter()
+            .find(|h| h.symbol == s.symbol && (s.account.is_empty() || h.account == s.account));
+        let name = holding.map(|h| h.name.as_str()).unwrap_or("");
+        let market = holding.map(|h| h.market).unwrap_or(Market::KRX);
         let display = if name.is_empty() {
             s.symbol.clone()
         } else {
@@ -927,7 +937,7 @@ fn cmd_signal_list(user_id: i64) -> String {
             i + 1,
             display,
             account_tag(&s.account),
-            s.condition.display_description()
+            formatter::format_condition(&s.condition, &market)
         ));
     }
     msg.push_str("\n\n⚠️ 여러 개 삭제 시 한 번에: /signal remove 1 2");
@@ -962,10 +972,15 @@ fn cmd_signal_remove(user_id: i64, args: &str) -> String {
     nums.sort_unstable_by(|a, b| b.cmp(a));
     nums.dedup();
 
+    let portfolio = storage::load_portfolio(user_id);
     let mut removed_descs: Vec<String> = Vec::new();
     for num in &nums {
         let s = store.signals.remove(num - 1);
-        removed_descs.push(format!("{}. {}: {}", num, s.symbol, s.condition.display_description()));
+        let market = portfolio.holdings.iter()
+            .find(|h| h.symbol == s.symbol && (s.account.is_empty() || h.account == s.account))
+            .map(|h| h.market)
+            .unwrap_or(Market::KRX);
+        removed_descs.push(format!("{}. {}: {}", num, s.symbol, formatter::format_condition(&s.condition, &market)));
     }
 
     if let Err(e) = storage::save_signals(user_id, &store) {

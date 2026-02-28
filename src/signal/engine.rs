@@ -68,8 +68,9 @@ pub async fn check_all_signals(api: &ApiHandle, bot: &Bot, user_id: i64) {
         );
 
         if triggered {
-            let condition_desc = signal_store.signals[idx].condition.display_description();
+            let condition_desc = formatter::format_condition(&signal_store.signals[idx].condition, &market);
             let alert_msg = formatter::format_signal_alert(
+                &market,
                 &symbol,
                 &price_data.name,
                 &sig_account,
