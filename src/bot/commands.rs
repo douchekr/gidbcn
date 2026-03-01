@@ -448,12 +448,17 @@ async fn cmd_list(user_id: i64, args: &str, api: &ApiHandle) -> String {
         return "포트폴리오가 비어있습니다. /port add 로 종목을 추가하세요.".to_string();
     }
 
-    // 계좌 필터 적용
-    if !account_filter.is_empty() {
-        store.holdings.retain(|h| h.account == account_filter);
-        if store.holdings.is_empty() {
-            return format!("@{account_filter} 계좌에 종목이 없습니다.");
-        }
+    // 계좌 필터: 표시 대상 인덱스만 추림 (store 자체는 변경 안 함 — 캐시 저장 시 전체 보존)
+    let indices: Vec<usize> = if account_filter.is_empty() {
+        (0..store.holdings.len()).collect()
+    } else {
+        store.holdings.iter().enumerate()
+            .filter(|(_, h)| h.account == account_filter)
+            .map(|(i, _)| i)
+            .collect()
+    };
+    if indices.is_empty() {
+        return format!("@{account_filter} 계좌에 종목이 없습니다.");
     }
 
     let now = kst_now().format("%Y-%m-%d %H:%M").to_string();
@@ -473,7 +478,8 @@ async fn cmd_list(user_id: i64, args: &str, api: &ApiHandle) -> String {
     let mut has_cached = false;
     let mut failed_symbols: Vec<String> = Vec::new();
 
-    for h in &mut store.holdings {
+    for &idx in &indices {
+        let h = &mut store.holdings[idx];
         // CART: API 호출 없이 cached_price 직접 사용
         let price_result = if h.market == Market::CART {
             match h.cached_price {
