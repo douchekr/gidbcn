@@ -74,7 +74,11 @@ pub fn format_holding_line_no_price(h: &Holding) -> String {
     let name = display_name(h);
     let acct = acct_tag(&h.account);
     match h.market {
-        Market::KRX | Market::CART => format!(
+        Market::CART => format!(
+            "• {}{} | {} | 매입 {} | 현재가: -",
+            name, acct, fmt_qty(h), fmt_price_krx(h.avg_price)
+        ),
+        Market::KRX => format!(
             "• {} {}{} | {} | 매입 {} | 현재가: -",
             h.symbol, name, acct, fmt_qty(h), fmt_price_krx(h.avg_price)
         ),
@@ -104,7 +108,12 @@ pub fn format_holding_line(h: &Holding, price: &PriceData, _usd_krw: f64) -> Str
     let acct = acct_tag(&h.account);
 
     match h.market {
-        Market::KRX | Market::CART => format!(
+        Market::CART => format!(
+            "• {}{} | {} | {}→{} | {sign}{:.1}%",
+            name, acct, fmt_qty(h),
+            fmt_price_krx(h.avg_price), fmt_price_krx(price.current_price), pnl_pct
+        ),
+        Market::KRX => format!(
             "• {} {}{} | {} | {}→{} | {sign}{:.1}%",
             h.symbol, name, acct, fmt_qty(h),
             fmt_price_krx(h.avg_price), fmt_price_krx(price.current_price), pnl_pct
@@ -146,17 +155,23 @@ pub fn format_info(h: &Holding, price: &PriceData, signals: &[&Signal], usd_krw:
     };
     let acct = acct_tag(&h.account);
 
+    let sym_name = if h.market == Market::CART {
+        format!("{}{}", name, acct)
+    } else {
+        format!("{} {}{}", h.symbol, name, acct)
+    };
+
     let mut msg = match h.market {
         Market::KRX | Market::CART => format!(
-            "📈 {} {}{}\n현재가: {}원 (전일 대비 {sign}{:.1}%)\n매입가: {} × {}\n평가금액: {}원\n손익: {pnl_sign}{}원 ({pnl_sign}{:.1}%)",
-            h.symbol, name, acct,
+            "📈 {}\n현재가: {}원 (전일 대비 {sign}{:.1}%)\n매입가: {} × {}\n평가금액: {}원\n손익: {pnl_sign}{}원 ({pnl_sign}{:.1}%)",
+            sym_name,
             fmt_price_krx(price.current_price), price.change_pct,
             fmt_price_krx(h.avg_price), fmt_qty(h),
             fmt_int(eval), fmt_int(pnl), pnl_pct,
         ),
         Market::NAS | Market::NYS | Market::AMS => format!(
-            "📈 {} {}{}\n현재가: {} (전일 대비 {sign}{:.1}%)\n매입가: {} × {}\n평가금액: {} (약 {}원)\n손익: {pnl_sign}{} ({pnl_sign}{:.1}%)\n💱 USD/KRW: {}",
-            h.symbol, name, acct,
+            "📈 {}\n현재가: {} (전일 대비 {sign}{:.1}%)\n매입가: {} × {}\n평가금액: {} (약 {}원)\n손익: {pnl_sign}{} ({pnl_sign}{:.1}%)\n💱 USD/KRW: {}",
+            sym_name,
             fmt_price_us(price.current_price), price.change_pct,
             fmt_price_us(h.avg_price), fmt_qty(h),
             fmt_price_us(eval), fmt_int(eval * usd_krw),
@@ -164,8 +179,8 @@ pub fn format_info(h: &Holding, price: &PriceData, signals: &[&Signal], usd_krw:
             fmt_int(usd_krw),
         ),
         Market::BOND => format!(
-            "📈 {} {}{}\n현재가: {}원 (전일 대비 {sign}{:.1}%)\n매입가: {} × {}\n평가금액: {}원\n손익: {pnl_sign}{}원 ({pnl_sign}{:.1}%)",
-            h.symbol, name, acct,
+            "📈 {}\n현재가: {}원 (전일 대비 {sign}{:.1}%)\n매입가: {} × {}\n평가금액: {}원\n손익: {pnl_sign}{}원 ({pnl_sign}{:.1}%)",
+            sym_name,
             fmt_price_bond(price.current_price), price.change_pct,
             fmt_price_bond(h.avg_price), fmt_qty(h),
             fmt_int(eval), fmt_int(pnl), pnl_pct,
