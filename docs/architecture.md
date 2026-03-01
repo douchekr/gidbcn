@@ -104,9 +104,24 @@ fn is_market_hours() -> bool {
 - CART/BOND 종목: `Market::is_open_now()` = false → 시그널 엔진에서 개별 스킵
 - **환율 별도 스케줄 없음**: 해외주식 시세 조회 시 `t_rate` 부산물로 actor 메모리 갱신
 
-### 토큰 갱신
+### 토큰 갱신 전략
 
-API Actor가 매 요청 전 `token_needs_refresh()` 확인. 만료 1시간 전이면 자동 갱신 후 `update_config()`로 저장.
+두 시스템의 토큰 방식이 근본적으로 다름:
+
+| | KIS Open API | Telegram Bot API |
+|---|---|---|
+| 토큰 유형 | OAuth (client_credentials) | 고정 API 키 (BotFather 발급) |
+| 유효기간 | 24시간 | 무기한 (수동 revoke 전까지) |
+| 갱신 필요 | O — 자동 갱신 | X — 갱신 불필요 |
+| 발급 제한 | 1분당 1회 | 없음 |
+
+**KIS 토큰 자동 갱신 흐름**:
+1. API Actor가 매 요청 전 `token_needs_refresh()` 호출
+2. 만료 1시간 전이면 `issue_token()` → POST `/oauth2/tokenP`
+3. 새 토큰을 `update_config()`로 config.json에 저장
+4. 결과적으로 약 23시간 간격으로 갱신 (증권사에서 토큰 발급 확인 문자 발송됨)
+
+**텔레그램 봇 토큰**: config.json에 한 번 설정하면 끝. 런타임 갱신 로직 없음.
 
 ---
 
