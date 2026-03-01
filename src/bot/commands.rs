@@ -726,6 +726,7 @@ async fn cmd_summary(user_id: i64, api: &ApiHandle) -> String {
     let mut bond_val = 0.0f64;
     let mut etc_val = 0.0f64;
     let mut total_cost = 0.0f64;
+    let mut acct_vals: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
     let mut has_cached = false;
     let mut portfolio_updated = false;
     let mut failed_symbols: Vec<String> = Vec::new();
@@ -767,24 +768,23 @@ async fn cmd_summary(user_id: i64, api: &ApiHandle) -> String {
         let eval = current_price * h.quantity * factor;
         let cost = h.avg_price * h.quantity * factor;
 
+        let eval_krw = match h.market {
+            Market::NAS | Market::NYS | Market::AMS => eval * usd_krw,
+            _ => eval,
+        };
+        let cost_krw = match h.market {
+            Market::NAS | Market::NYS | Market::AMS => cost * usd_krw,
+            _ => cost,
+        };
+
         match h.market {
-            Market::KRX => {
-                domestic_val += eval;
-                total_cost += cost;
-            }
-            Market::NAS | Market::NYS | Market::AMS => {
-                overseas_val += eval * usd_krw;
-                total_cost += cost * usd_krw;
-            }
-            Market::BOND => {
-                bond_val += eval;
-                total_cost += cost;
-            }
-            Market::CART => {
-                etc_val += eval;
-                total_cost += cost;
-            }
+            Market::KRX => domestic_val += eval_krw,
+            Market::NAS | Market::NYS | Market::AMS => overseas_val += eval_krw,
+            Market::BOND => bond_val += eval_krw,
+            Market::CART => etc_val += eval_krw,
         }
+        total_cost += cost_krw;
+        *acct_vals.entry(h.account.clone()).or_default() += eval_krw;
     }
 
     if portfolio_updated {
@@ -839,6 +839,16 @@ async fn cmd_summary(user_id: i64, api: &ApiHandle) -> String {
 
     if overseas_val > 0.0 {
         msg.push_str(&format!("\n💱 USD/KRW: {}", formatter::fmt_int(usd_krw)));
+    }
+    // 계좌별 요약 (2종류 이상일 때만)
+    if acct_vals.len() > 1 {
+        msg.push_str("\n\n📂 계좌별");
+        let mut accts: Vec<_> = acct_vals.into_iter().collect();
+        accts.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        for (acct, val) in &accts {
+            let label = if acct.is_empty() { "기본" } else { acct };
+            msg.push_str(&format!("\n@{}: {}원 ({})", label, formatter::fmt_int(*val), fmt_pct(*val)));
+        }
     }
     if has_cached {
         msg.push_str("\n⏱ 직전 조회 가격");
