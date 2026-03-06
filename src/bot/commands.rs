@@ -1,6 +1,7 @@
 use anyhow::Result;
 use chrono::{FixedOffset, Utc};
 use teloxide::prelude::*;
+use teloxide::types::InputFile;
 use teloxide::utils::command::BotCommands;
 
 use crate::api::ApiHandle;
@@ -74,6 +75,24 @@ pub async fn handle_command(
             "접근 권한이 없습니다.\n(chat_id: {user_id})"
         )).await?;
         return Ok(());
+    }
+
+    // export: CSV 파일로 전송
+    if let Command::Port(ref args) = cmd {
+        let parts: Vec<&str> = args.split_whitespace().collect();
+        if parts.first().copied() == Some("export") {
+            let rest = parts.get(1..).unwrap_or(&[]).join(" ").to_uppercase();
+            let csv = cmd_export(user_id, &rest);
+            if csv.starts_with('\u{FEFF}') {
+                // CSV 데이터 → 파일 전송
+                let file = InputFile::memory(csv.into_bytes()).file_name("portfolio.csv");
+                bot.send_document(chat_id, file).await?;
+            } else {
+                // 에러 메시지 → 텍스트 전송
+                bot.send_message(chat_id, csv).await?;
+            }
+            return Ok(());
+        }
     }
 
     let reply = match cmd {
@@ -872,6 +891,7 @@ async fn cmd_summary(user_id: i64, api: &ApiHandle) -> String {
     msg
 }
 
+/// CSV 파일 내용을 반환. 정상 시 BOM(\u{FEFF}) 접두, 에러 시 일반 문자열.
 fn cmd_export(user_id: i64, args: &str) -> String {
     let raw: Vec<&str> = args.split_whitespace().collect();
     let (_, account_filter) = extract_account(&raw);
@@ -897,7 +917,7 @@ fn cmd_export(user_id: i64, args: &str) -> String {
         } else {
             h.symbol.clone()
         };
-        format!("{} {} {} {}", sym, h.quantity, cost, h.account)
+        format!("{},{},{},{},{}", h.name, sym, h.quantity, cost, h.account)
     }
 
     let mut domestic: Vec<String> = Vec::new();
@@ -918,21 +938,22 @@ fn cmd_export(user_id: i64, args: &str) -> String {
         }
     }
 
-    let mut sections: Vec<String> = Vec::new();
-    if !domestic.is_empty() {
-        sections.push(format!("🇰🇷 국내\n<pre>{}</pre>", domestic.join("\n")));
-    }
-    if !overseas.is_empty() {
-        sections.push(format!("🇺🇸 미국\n<pre>{}</pre>", overseas.join("\n")));
-    }
-    if !bonds.is_empty() {
-        sections.push(format!("🏛 채권\n<pre>{}</pre>", bonds.join("\n")));
-    }
-    if !etc.is_empty() {
-        sections.push(format!("🏷 기타\n<pre>{}</pre>", etc.join("\n")));
+    let mut lines: Vec<String> = vec!["종목명,코드,수량,매입금액,계좌".to_string()];
+    let sections: &[(&str, &Vec<String>)] = &[
+        ("국내", &domestic),
+        ("미국", &overseas),
+        ("채권", &bonds),
+        ("기타", &etc),
+    ];
+    for (label, rows) in sections {
+        if !rows.is_empty() {
+            lines.push(String::new());
+            lines.push(format!("{},,,,", label));
+            lines.extend(rows.iter().cloned());
+        }
     }
 
-    sections.join("\n\n")
+    format!("\u{FEFF}{}\n", lines.join("\n"))
 }
 
 // --- 시그널 ---
