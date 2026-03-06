@@ -91,7 +91,13 @@ pub async fn handle_command(
         }
     };
 
-    bot.send_message(chat_id, reply).await?;
+    if reply.contains("<pre>") {
+        bot.send_message(chat_id, reply)
+            .parse_mode(teloxide::types::ParseMode::Html)
+            .await?;
+    } else {
+        bot.send_message(chat_id, reply).await?;
+    }
     Ok(())
 }
 
@@ -886,7 +892,12 @@ fn cmd_export(user_id: i64, args: &str) -> String {
 
     fn export_row(h: &Holding) -> String {
         let cost = h.avg_price * h.quantity * h.market.value_factor();
-        format!("{} {} {} {}", h.symbol, h.quantity, cost, h.account)
+        let sym = if h.symbol.chars().all(|c| c.is_ascii_digit()) {
+            format!("'{}", h.symbol)
+        } else {
+            h.symbol.clone()
+        };
+        format!("{} {} {} {}", sym, h.quantity, cost, h.account)
     }
 
     let mut domestic: Vec<String> = Vec::new();
@@ -909,16 +920,16 @@ fn cmd_export(user_id: i64, args: &str) -> String {
 
     let mut sections: Vec<String> = Vec::new();
     if !domestic.is_empty() {
-        sections.push(format!("🇰🇷 국내\n{}", domestic.join("\n")));
+        sections.push(format!("🇰🇷 국내\n<pre>{}</pre>", domestic.join("\n")));
     }
     if !overseas.is_empty() {
-        sections.push(format!("🇺🇸 미국\n{}", overseas.join("\n")));
+        sections.push(format!("🇺🇸 미국\n<pre>{}</pre>", overseas.join("\n")));
     }
     if !bonds.is_empty() {
-        sections.push(format!("🏛 채권\n{}", bonds.join("\n")));
+        sections.push(format!("🏛 채권\n<pre>{}</pre>", bonds.join("\n")));
     }
     if !etc.is_empty() {
-        sections.push(format!("🏷 기타\n{}", etc.join("\n")));
+        sections.push(format!("🏷 기타\n<pre>{}</pre>", etc.join("\n")));
     }
 
     sections.join("\n\n")
