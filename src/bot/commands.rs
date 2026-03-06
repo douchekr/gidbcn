@@ -91,13 +91,7 @@ pub async fn handle_command(
         }
     };
 
-    if reply.starts_with("<pre>") {
-        bot.send_message(chat_id, reply)
-            .parse_mode(teloxide::types::ParseMode::Html)
-            .await?;
-    } else {
-        bot.send_message(chat_id, reply).await?;
-    }
+    bot.send_message(chat_id, reply).await?;
     Ok(())
 }
 
@@ -892,7 +886,7 @@ fn cmd_export(user_id: i64, args: &str) -> String {
 
     fn export_row(h: &Holding) -> String {
         let cost = h.avg_price * h.quantity * h.market.value_factor();
-        format!("{}\t{}\t{}\t{}", h.symbol, h.quantity, cost, h.account)
+        format!("{} {} {} {}", h.symbol, h.quantity, cost, h.account)
     }
 
     let mut domestic: Vec<String> = Vec::new();
@@ -927,7 +921,7 @@ fn cmd_export(user_id: i64, args: &str) -> String {
         sections.push(format!("🏷 기타\n{}", etc.join("\n")));
     }
 
-    format!("<pre>{}</pre>", sections.join("\n\n"))
+    sections.join("\n\n")
 }
 
 // --- 시그널 ---
