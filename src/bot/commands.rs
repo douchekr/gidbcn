@@ -894,7 +894,10 @@ fn cmd_export(user_id: i64, args: &str) -> String {
     let mut bonds: Vec<String> = Vec::new();
     let mut etc: Vec<String> = Vec::new();
 
-    for h in &holdings {
+    let mut sorted = holdings.clone();
+    sorted.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+
+    for h in &sorted {
         let row = export_row(h);
         match h.market {
             Market::KRX => domestic.push(row),
