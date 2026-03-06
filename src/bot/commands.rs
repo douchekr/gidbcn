@@ -18,7 +18,7 @@ pub enum Command {
     Start,
     #[command(description = "도움말")]
     Help,
-    #[command(description = "포트폴리오: /port add|remove|edit|list|info|summary ...")]
+    #[command(description = "포트폴리오: /port add|remove|edit|list|info|summary|export ...")]
     Port(String),
     #[command(description = "시그널: /signal add|list|remove|clear ...")]
     Signal(String),
@@ -108,7 +108,8 @@ fn help_text() -> String {
      /port edit [종목코드] [수량] [매입가] [@계좌]\n\
      /port list [@계좌] — 전체 포트폴리오 (계좌 필터)\n\
      /port info [종목코드] [@계좌] — 종목 상세\n\
-     /port summary — 자산배분 요약\n\n\
+     /port summary — 자산배분 요약\n\
+     /port export [@계좌] — 구글 시트 붙여넣기용\n\n\
      시그널:\n\
      /signal add [종목코드] [> 또는 <] [값 또는 수익률%] [@계좌]\n\
      /signal list — 전체 시그널\n\
@@ -185,13 +186,15 @@ async fn cmd_port(user_id: i64, args: &str, api: &ApiHandle) -> String {
         Some("list")    => cmd_list(user_id, &rest, api).await,
         Some("info")    => cmd_info(user_id, &rest, api).await,
         Some("summary") => cmd_summary(user_id, api).await,
+        Some("export")  => cmd_export(user_id, &rest),
         _ => "사용법:\n\
               /port add [마켓] [종목코드] [수량] [매입가] [@계좌]\n\
               /port remove [종목코드|*] [@계좌]\n\
               /port edit [종목코드] [수량] [매입가] [@계좌]\n\
               /port list [@계좌]\n\
               /port info [종목코드] [@계좌]\n\
-              /port summary"
+              /port summary\n\
+              /port export [@계좌] — 구글 시트 붙여넣기용"
             .to_string(),
     }
 }
@@ -861,6 +864,61 @@ async fn cmd_summary(user_id: i64, api: &ApiHandle) -> String {
     }
 
     msg
+}
+
+fn cmd_export(user_id: i64, args: &str) -> String {
+    let raw: Vec<&str> = args.split_whitespace().collect();
+    let (_, account_filter) = extract_account(&raw);
+
+    let store = storage::load_portfolio(user_id);
+    if store.holdings.is_empty() {
+        return "포트폴리오가 비어있습니다.".to_string();
+    }
+
+    let holdings: Vec<&Holding> = if account_filter.is_empty() {
+        store.holdings.iter().collect()
+    } else {
+        store.holdings.iter().filter(|h| h.account == account_filter).collect()
+    };
+    if holdings.is_empty() {
+        return format!("@{account_filter} 계좌에 종목이 없습니다.");
+    }
+
+    fn export_row(h: &Holding) -> String {
+        let cost = h.avg_price * h.quantity * h.market.value_factor();
+        format!("{}\t{}\t{}\t{}", h.symbol, h.quantity, cost, h.account)
+    }
+
+    let mut domestic: Vec<String> = Vec::new();
+    let mut overseas: Vec<String> = Vec::new();
+    let mut bonds: Vec<String> = Vec::new();
+    let mut etc: Vec<String> = Vec::new();
+
+    for h in &holdings {
+        let row = export_row(h);
+        match h.market {
+            Market::KRX => domestic.push(row),
+            Market::NAS | Market::NYS | Market::AMS => overseas.push(row),
+            Market::BOND => bonds.push(row),
+            Market::CART => etc.push(row),
+        }
+    }
+
+    let mut sections: Vec<String> = Vec::new();
+    if !domestic.is_empty() {
+        sections.push(format!("🇰🇷 국내\n{}", domestic.join("\n")));
+    }
+    if !overseas.is_empty() {
+        sections.push(format!("🇺🇸 미국\n{}", overseas.join("\n")));
+    }
+    if !bonds.is_empty() {
+        sections.push(format!("🏛 채권\n{}", bonds.join("\n")));
+    }
+    if !etc.is_empty() {
+        sections.push(format!("🏷 기타\n{}", etc.join("\n")));
+    }
+
+    sections.join("\n\n")
 }
 
 // --- 시그널 ---
