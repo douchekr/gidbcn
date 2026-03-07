@@ -85,7 +85,8 @@ pub async fn handle_command(
             let csv = cmd_export(user_id, &rest);
             if csv.starts_with('\u{FEFF}') {
                 // CSV 데이터 → 파일 전송
-                let file = InputFile::memory(csv.into_bytes()).file_name("portfolio.csv");
+                let fname = chrono::Local::now().format("portfolio_%Y%m%d_%H%M.csv").to_string();
+                let file = InputFile::memory(csv.into_bytes()).file_name(fname);
                 bot.send_document(chat_id, file).await?;
             } else {
                 // 에러 메시지 → 텍스트 전송
@@ -917,7 +918,8 @@ fn cmd_export(user_id: i64, args: &str) -> String {
         } else {
             h.symbol.clone()
         };
-        format!("{},{},{},{},{}", h.name, sym, h.quantity, cost, h.account)
+        let price = h.cached_price.map_or(String::new(), |p| format!("{p}"));
+        format!("{},{},{},{},{},{}", h.name, sym, price, h.quantity, cost, h.account)
     }
 
     let mut domestic: Vec<String> = Vec::new();
@@ -938,7 +940,9 @@ fn cmd_export(user_id: i64, args: &str) -> String {
         }
     }
 
-    let mut lines: Vec<String> = vec!["종목명,코드,수량,매입금액,계좌".to_string()];
+    let mut lines: Vec<String> = vec![
+        "종목명,코드,현재가,수량,매입금액,계좌".to_string(),
+    ];
     let sections: &[(&str, &Vec<String>)] = &[
         ("국내", &domestic),
         ("미국", &overseas),
@@ -948,7 +952,7 @@ fn cmd_export(user_id: i64, args: &str) -> String {
     for (label, rows) in sections {
         if !rows.is_empty() {
             lines.push(String::new());
-            lines.push(format!("{},,,,", label));
+            lines.push(format!("{},,,,,", label));
             lines.extend(rows.iter().cloned());
         }
     }
