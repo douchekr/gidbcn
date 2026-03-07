@@ -919,7 +919,7 @@ fn cmd_export(user_id: i64, args: &str) -> String {
             h.symbol.clone()
         };
         let price = h.cached_price.map_or(String::new(), |p| format!("{p}"));
-        format!("{},{},{},{},{},{}", h.name, sym, price, h.quantity, cost, h.account)
+        format!("{},{},{},{},{},{}", h.name, price, sym, h.quantity, cost, h.account)
     }
 
     let mut domestic: Vec<String> = Vec::new();
@@ -941,7 +941,7 @@ fn cmd_export(user_id: i64, args: &str) -> String {
     }
 
     let mut lines: Vec<String> = vec![
-        "종목명,코드,현재가,수량,매입금액,계좌".to_string(),
+        "종목명,현재가,코드,수량,매입금액,계좌".to_string(),
     ];
     let sections: &[(&str, &Vec<String>)] = &[
         ("국내", &domestic),
