@@ -19,15 +19,21 @@ pub enum Command {
     Start,
     #[command(description = "도움말")]
     Help,
-    #[command(description = "포트폴리오: /port add|remove|edit|list|info|summary|export ...")]
+    #[command(description = "포트폴리오: /port add|rm|e|ls|i|sum|ex ...")]
     Port(String),
-    #[command(description = "시그널: /signal add|list|remove|clear ...")]
+    #[command(description = "포트폴리오 단축 (/p)")]
+    P(String),
+    #[command(description = "시그널: /signal add|ls|rm|cls|prn ...")]
     Signal(String),
+    #[command(description = "시그널 단축 (/s)")]
+    S(String),
     #[command(description = "시스템 상태")]
     Status,
+    #[command(description = "시스템 상태 단축 (/st)")]
+    St,
     #[command(description = "핑")]
     Ping,
-    #[command(description = "사용자 관리 (오너 전용): /user add|remove|list")]
+    #[command(description = "사용자 관리 (오너 전용): /user add|rm|ls")]
     User(String),
 }
 
@@ -78,9 +84,9 @@ pub async fn handle_command(
     }
 
     // export: CSV 파일로 전송
-    if let Command::Port(ref args) = cmd {
+    if let Command::Port(ref args) | Command::P(ref args) = cmd {
         let parts: Vec<&str> = args.split_whitespace().collect();
-        if parts.first().copied() == Some("export") {
+        if parts.first().copied() == Some("export") || parts.first().copied() == Some("ex") {
             let rest = parts.get(1..).unwrap_or(&[]).join(" ").to_uppercase();
             let csv = cmd_export(user_id, &rest);
             if csv.starts_with('\u{FEFF}') {
@@ -99,9 +105,9 @@ pub async fn handle_command(
     let reply = match cmd {
         Command::Start | Command::Help => help_text(),
         Command::Ping => "pong".to_string(),
-        Command::Port(args) => cmd_port(user_id, &args, &api).await,
-        Command::Signal(args) => cmd_signal(user_id, &args),
-        Command::Status => cmd_status(user_id),
+        Command::Port(args) | Command::P(args) => cmd_port(user_id, &args, &api).await,
+        Command::Signal(args) | Command::S(args) => cmd_signal(user_id, &args),
+        Command::Status | Command::St => cmd_status(user_id),
         Command::User(args) => {
             if !is_owner {
                 "이 명령어는 봇 오너만 사용할 수 있습니다.".to_string()
@@ -128,44 +134,41 @@ fn kst_now() -> chrono::DateTime<FixedOffset> {
 
 fn help_text() -> String {
     "📋 명령어 목록\n\n\
-     포트폴리오:\n\
-     /port add [마켓] [종목코드] [수량] [매입가] [@계좌]\n\
-     /port remove [종목코드|*] [@계좌]\n\
-     /port edit [종목코드] [수량] [매입가] [@계좌]\n\
-     /port list [@계좌] — 전체 포트폴리오 (계좌 필터)\n\
-     /port info [종목코드] [@계좌] — 종목 상세\n\
-     /port summary — 자산배분 요약\n\
-     /port export [@계좌] — 구글 시트 붙여넣기용\n\n\
-     시그널:\n\
-     /signal add [종목코드] [> 또는 <] [값 또는 수익률%] [@계좌]\n\
-     /signal list — 전체 시그널\n\
-     /signal remove [번호]\n\
-     /signal clear [종목코드] [@계좌]\n\
-     /signal purge — 비활성 시그널 전체 삭제\n\n\
+     포트폴리오 (/port 또는 /p):\n\
+     /p add|a [마켓] [종목코드] [수량] [매입가] [@계좌]\n\
+     /p rm [종목코드|*] [@계좌]\n\
+     /p e [종목코드] [수량] [매입가] [@계좌]\n\
+     /p ls [@계좌] — 전체 포트폴리오\n\
+     /p i [종목코드] [@계좌] — 종목 상세\n\
+     /p sum — 자산배분 요약\n\
+     /p ex [@계좌] — 구글 시트 붙여넣기용\n\n\
+     시그널 (/signal 또는 /s):\n\
+     /s add|a [종목코드] [> 또는 <] [값 또는 수익률%] [@계좌]\n\
+     /s ls — 전체 시그널\n\
+     /s rm [번호]  ← 여러 개: /s rm 1 2\n\
+     /s cls [종목코드] [@계좌]\n\
+     /s prn — 비활성 시그널 전체 삭제\n\n\
      시스템:\n\
-     /status — 시스템 상태\n\
+     /status|st — 시스템 상태\n\
      /ping — 핑\n\n\
-     사용자 관리 (오너 전용):\n\
-     /user add [chat_id] — 사용자 추가\n\
-     /user remove [chat_id] — 사용자 삭제\n\
-     /user list — 허용된 사용자 목록\n\n\
+     사용자 관리 (/user, 오너 전용):\n\
+     /user add|a [chat_id]\n\
+     /user rm [chat_id]\n\
+     /user ls\n\n\
      마켓: KRX, NAS, NYS, AMS, BOND, CART\n\
      조건: > [가격], < [가격], > [수익률%], < [수익률%]\n\n\
      📂 계좌 구분 (@계좌):\n\
      동일 종목을 여러 계좌(IRP, 일반 등)에 나눠 보유할 때 사용.\n\
-     포트: /port add KRX 005930 10 70000 @IRP\n\
-     포트: /port add KRX 005930 5 72000 @일반\n\
-     시그널: /signal add 005930 > 80000 @IRP\n\
-     시그널: /signal add 005930 > 15% @일반\n\
+     /p a KRX 005930 10 70000 @IRP\n\
+     /s a 005930 > 80000 @IRP\n\
      • @계좌 미지정 시 — 종목이 1개 계좌에만 있으면 자동 적용\n\
-     • @계좌 미지정 시 — 여러 계좌에 있으면 계좌 지정 요청\n\
-     • 시그널 수익률 조건은 해당 계좌의 매입가 기준으로 계산\n\n\
+     • @계좌 미지정 시 — 여러 계좌에 있으면 계좌 지정 요청\n\n\
      ※ BOND 수량/매입가 단위:\n\
        수량 = 액면가 1,000원 단위 (예: 50000 → 액면 5,000만원)\n\
        매입가 = 10,000원 액면 기준 가격 (예: 7435)\n\n\
      ※ CART (수동 관리):\n\
-       /port add CART 비트코인 2 50000000 @코인 =55000000\n\
-       /port edit 비트코인 2 50000000 =55000000 @코인\n\
+       /p a CART 비트코인 2 50000000 @코인 =55000000\n\
+       /p e 비트코인 2 50000000 =55000000 @코인\n\
        이름=종목코드. =현재가·@계좌는 순서 자유. 생략 시 매입가 사용.\n\
        시세 자동 조회·시그널 불가."
         .to_string()
@@ -206,21 +209,21 @@ async fn cmd_port(user_id: i64, args: &str, api: &ApiHandle) -> String {
     // 서브커맨드 이후 인자: 종목코드 등 대문자 정규화 (한글/숫자는 영향 없음)
     let rest = parts.get(1..).unwrap_or(&[]).join(" ").to_uppercase();
     match parts.first().copied() {
-        Some("add")     => cmd_add(user_id, &rest, api).await,
-        Some("remove")  => cmd_remove(user_id, &rest),
-        Some("edit")    => cmd_edit(user_id, &rest),
-        Some("list")    => cmd_list(user_id, &rest, api).await,
-        Some("info")    => cmd_info(user_id, &rest, api).await,
-        Some("summary") => cmd_summary(user_id, api).await,
-        Some("export")  => cmd_export(user_id, &rest),
+        Some("add") | Some("a")        => cmd_add(user_id, &rest, api).await,
+        Some("remove") | Some("rm")    => cmd_remove(user_id, &rest),
+        Some("edit") | Some("e")       => cmd_edit(user_id, &rest),
+        Some("list") | Some("ls")      => cmd_list(user_id, &rest, api).await,
+        Some("info") | Some("i")       => cmd_info(user_id, &rest, api).await,
+        Some("summary") | Some("sum")  => cmd_summary(user_id, api).await,
+        Some("export") | Some("ex")    => cmd_export(user_id, &rest),
         _ => "사용법:\n\
-              /port add [마켓] [종목코드] [수량] [매입가] [@계좌]\n\
-              /port remove [종목코드|*] [@계좌]\n\
-              /port edit [종목코드] [수량] [매입가] [@계좌]\n\
-              /port list [@계좌]\n\
-              /port info [종목코드] [@계좌]\n\
-              /port summary\n\
-              /port export [@계좌] — 구글 시트 붙여넣기용"
+              /p add (a) [마켓] [종목코드] [수량] [매입가] [@계좌]\n\
+              /p rm [종목코드|*] [@계좌]\n\
+              /p e [종목코드] [수량] [매입가] [@계좌]\n\
+              /p ls [@계좌]\n\
+              /p i [종목코드] [@계좌]\n\
+              /p sum\n\
+              /p ex [@계좌]"
             .to_string(),
     }
 }
@@ -967,11 +970,11 @@ fn cmd_signal(user_id: i64, args: &str) -> String {
     // 서브커맨드 이후 인자: 종목코드 등 대문자 정규화
     let rest = parts.get(1..).unwrap_or(&[]).join(" ").to_uppercase();
     match parts.first().copied() {
-        Some("list") => cmd_signal_list(user_id),
-        Some("remove") => cmd_signal_remove(user_id, &rest),
-        Some("clear") => cmd_signal_clear(user_id, &rest),
-        Some("purge") => cmd_signal_purge(user_id),
-        Some("add") => {
+        Some("list") | Some("ls")    => cmd_signal_list(user_id),
+        Some("remove") | Some("rm")  => cmd_signal_remove(user_id, &rest),
+        Some("clear") | Some("cls")  => cmd_signal_clear(user_id, &rest),
+        Some("purge") | Some("prn")  => cmd_signal_purge(user_id),
+        Some("add") | Some("a") => {
             let rest_parts: Vec<&str> = rest.split_whitespace().collect();
             let (sig_parts, account) = extract_account(&rest_parts);
             if sig_parts.len() < 3 {
@@ -1015,11 +1018,11 @@ fn cmd_signal(user_id: i64, args: &str) -> String {
             format!("✅ 시그널 설정 완료\n{symbol}{}: {}", account_tag(&account), formatter::format_condition(&condition, &market))
         }
         _ => "사용법:\n\
-              /signal add [종목코드] [> 또는 <] [값 또는 수익률%] [@계좌]\n\
-              /signal list\n\
-              /signal remove [번호]  ← 여러 개: /signal remove 1 2\n\
-              /signal clear [종목코드] [@계좌]\n\
-              /signal purge  ← 비활성 시그널 전체 삭제\n\
+              /s add (a) [종목코드] [> 또는 <] [값 또는 수익률%] [@계좌]\n\
+              /s ls\n\
+              /s rm [번호]  ← 여러 개: /s rm 1 2\n\
+              /s cls [종목코드] [@계좌]\n\
+              /s prn  ← 비활성 시그널 전체 삭제\n\
               ⚠️ 삭제 시 목록 확인 후, 여러 개는 한 번에 입력하세요."
             .to_string(),
     }
@@ -1154,7 +1157,7 @@ fn cmd_signal_purge(user_id: i64) -> String {
 fn cmd_user(args: &str) -> String {
     let parts: Vec<&str> = args.split_whitespace().collect();
     match parts.first().copied() {
-        Some("add") => {
+        Some("add") | Some("a") => {
             let id: i64 = match parts.get(1).and_then(|s| s.parse().ok()) {
                 Some(id) => id,
                 None => return "사용법: /user add [chat_id]".to_string(),
@@ -1169,7 +1172,7 @@ fn cmd_user(args: &str) -> String {
                 Err(e) => format!("저장 실패: {e:#}"),
             }
         }
-        Some("remove") => {
+        Some("remove") | Some("rm") => {
             let id: i64 = match parts.get(1).and_then(|s| s.parse().ok()) {
                 Some(id) => id,
                 None => return "사용법: /user remove [chat_id]".to_string(),
@@ -1185,7 +1188,7 @@ fn cmd_user(args: &str) -> String {
                 Err(e) => format!("저장 실패: {e:#}"),
             }
         }
-        Some("list") => {
+        Some("list") | Some("ls") => {
             let users = storage::load_allowed_users();
             if users.is_empty() {
                 "허용된 사용자가 없습니다.".to_string()
