@@ -3,8 +3,10 @@ BINARY   := gidbcn
 # 배포 대상 (환경변수로 덮어쓰기 가능: make deploy PI_HOST=pi@192.168.0.x)
 PI_HOST  ?= pi@raspberrypi.local
 PI_PATH  ?= /opt/kkuepark/gidbcn/$(BINARY)
+OCI_HOST  ?= oci
+OCI_PATH  ?= /opt/kkuepark/gidbcn/$(BINARY)
 
-.PHONY: build test build-pi deploy setup-cross
+.PHONY: build test build-pi deploy deploy-oci setup-cross
 
 build:
 	cargo build
@@ -45,6 +47,14 @@ build-pi:
 deploy: build-pi
 	scp target/$(TARGET)/release/$(BINARY) $(PI_HOST):$(PI_PATH)
 	@echo "배포 완료: $(PI_HOST):$(PI_PATH)"
+
+build-oci:
+	cargo build --release
+
+# 빌드 후 OCI 배포
+deploy-oci: build-oci
+	scp target/release/$(BINARY) $(OCI_HOST):$(OCI_PATH)
+	@echo "배포 완료: $(OCI_HOST):$(OCI_PATH)"
 
 # 크로스컴파일 사전 요구사항 안내
 setup-cross:
