@@ -50,6 +50,11 @@ where
 type PortfolioDb = HashMap<String, PortfolioStore>;
 type SignalDb = HashMap<String, SignalStore>;
 
+thread_local! {
+    static IN_MEMORY_PORTFOLIO: RefCell<Option<PortfolioDb>> = RefCell::new(None);
+    static IN_MEMORY_SIGNALS:   RefCell<Option<SignalDb>>    = RefCell::new(None);
+}
+
 fn load_db<T: serde::de::DeserializeOwned + Default + serde::Serialize>(path: &str) -> HashMap<String, T> {
     match std::fs::read_to_string(path) {
         Ok(data) => serde_json::from_str(&data).unwrap_or_else(|e| {
@@ -66,30 +71,56 @@ fn save_db<T: serde::Serialize>(path: &str, db: &HashMap<String, T>) -> Result<(
     Ok(())
 }
 
+fn with_portfolio_db<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut PortfolioDb) -> R,
+{
+    IN_MEMORY_PORTFOLIO.with(|cache| {
+        let mut borrow = cache.borrow_mut();
+        if borrow.is_none() {
+            *borrow = Some(load_db(PORTFOLIO_PATH));
+        }
+        f(borrow.as_mut().unwrap())
+    })
+}
+
+fn with_signal_db<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut SignalDb) -> R,
+{
+    IN_MEMORY_SIGNALS.with(|cache| {
+        let mut borrow = cache.borrow_mut();
+        if borrow.is_none() {
+            *borrow = Some(load_db(SIGNALS_PATH));
+        }
+        f(borrow.as_mut().unwrap())
+    })
+}
+
 // --- Portfolio ---
 
 pub fn load_portfolio(user_id: i64) -> PortfolioStore {
-    let db: PortfolioDb = load_db(PORTFOLIO_PATH);
-    db.get(&user_id.to_string()).cloned().unwrap_or_default()
+    with_portfolio_db(|db| db.get(&user_id.to_string()).cloned().unwrap_or_default())
 }
 
 pub fn save_portfolio(user_id: i64, store: &PortfolioStore) -> Result<()> {
-    let mut db: PortfolioDb = load_db(PORTFOLIO_PATH);
-    db.insert(user_id.to_string(), store.clone());
-    save_db(PORTFOLIO_PATH, &db)
+    with_portfolio_db(|db| {
+        db.insert(user_id.to_string(), store.clone());
+        save_db(PORTFOLIO_PATH, db)
+    })
 }
 
 // --- Signals ---
 
 pub fn load_signals(user_id: i64) -> SignalStore {
-    let db: SignalDb = load_db(SIGNALS_PATH);
-    db.get(&user_id.to_string()).cloned().unwrap_or_default()
+    with_signal_db(|db| db.get(&user_id.to_string()).cloned().unwrap_or_default())
 }
 
 pub fn save_signals(user_id: i64, store: &SignalStore) -> Result<()> {
-    let mut db: SignalDb = load_db(SIGNALS_PATH);
-    db.insert(user_id.to_string(), store.clone());
-    save_db(SIGNALS_PATH, &db)
+    with_signal_db(|db| {
+        db.insert(user_id.to_string(), store.clone());
+        save_db(SIGNALS_PATH, db)
+    })
 }
 
 // --- 허용 사용자 (config 인메모리) ---
@@ -108,6 +139,5 @@ pub fn save_allowed_users(users: &[i64]) -> Result<()> {
 // portfolio.json의 키 목록에서 user_id 반환
 
 pub fn list_user_ids() -> Vec<i64> {
-    let db: PortfolioDb = load_db(PORTFOLIO_PATH);
-    db.keys().filter_map(|k| k.parse::<i64>().ok()).collect()
+    with_portfolio_db(|db| db.keys().filter_map(|k| k.parse::<i64>().ok()).collect())
 }
