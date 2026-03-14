@@ -5,6 +5,7 @@ mod models;
 mod scheduler;
 mod signal;
 mod storage;
+mod watchlist;
 
 use teloxide::prelude::*;
 use tokio::sync::mpsc;
@@ -114,6 +115,11 @@ async fn async_main() {
 
     // 4. Config 인메모리 적재
     storage::init_config(config);
+
+    // 4-1. watchlist DB 초기화
+    if let Err(e) = watchlist::db::init_db() {
+        tracing::error!("watchlist DB 초기화 실패: {e:#}");
+    }
 
     // 5. API Actor 채널 생성 + spawn
     let (api_tx, api_rx) = mpsc::channel::<ApiRequest>(32);

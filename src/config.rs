@@ -10,6 +10,8 @@ pub struct Config {
     pub scheduler: SchedulerConfig,
     #[serde(default)]
     pub log: LogConfig,
+    #[serde(default)]
+    pub watchlist: WatchlistConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +71,32 @@ impl Default for LogConfig {
         }
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchlistConfig {
+    pub gemini_api_key: String,
+    #[serde(default = "default_gemini_model")]
+    pub gemini_model: String,
+    #[serde(default = "default_max_gemini_calls")]
+    pub max_gemini_calls_per_day: usize,
+    #[serde(default = "default_candidate_count")]
+    pub candidate_count: usize,
+}
+
+impl Default for WatchlistConfig {
+    fn default() -> Self {
+        Self {
+            gemini_api_key: String::new(),
+            gemini_model: default_gemini_model(),
+            max_gemini_calls_per_day: default_max_gemini_calls(),
+            candidate_count: default_candidate_count(),
+        }
+    }
+}
+
+fn default_gemini_model() -> String { "gemini-2.5-flash".to_string() }
+fn default_max_gemini_calls() -> usize { 250 }
+fn default_candidate_count() -> usize { 30 }
 
 impl Config {
     pub fn load(path: &str) -> Result<Self> {
