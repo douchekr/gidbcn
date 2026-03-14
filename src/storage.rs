@@ -14,11 +14,17 @@ pub const CONFIG_PATH: &str = "/opt/kkuepark/gidbcn/config.json";
 
 thread_local! {
     static IN_MEMORY_CONFIG: RefCell<Option<Config>> = RefCell::new(None);
+    static PASSPHRASE: RefCell<Option<String>> = RefCell::new(None);
 }
 
 /// 시작 시 1회 호출. 파일에서 로드한 config를 메모리에 적재.
 pub fn init_config(config: Config) {
     IN_MEMORY_CONFIG.with(|c| *c.borrow_mut() = Some(config));
+}
+
+/// 암호화 모드: 패스프레이즈 저장 (unlock 시 호출)
+pub fn set_passphrase(passphrase: &str) {
+    PASSPHRASE.with(|p| *p.borrow_mut() = Some(passphrase.to_string()));
 }
 
 /// 메모리 config 읽기 전용.
@@ -33,6 +39,7 @@ where
 }
 
 /// 메모리 config 수정 + 파일 저장.
+/// 암호화 모드면 save_encrypted, 평문이면 save.
 pub fn update_config<F>(f: F) -> Result<()>
 where
     F: FnOnce(&mut Config),
@@ -41,7 +48,19 @@ where
         let mut borrow = c.borrow_mut();
         let config = borrow.as_mut().expect("Config not initialized");
         f(config);
-        config.save(CONFIG_PATH)
+
+        PASSPHRASE.with(|p| {
+            let p_borrow = p.borrow();
+            if let Some(pass) = p_borrow.as_ref() {
+                tracing::debug!(
+                    "update_config: saving encrypted (watchlist.gemini_api_key={})",
+                    if config.watchlist.gemini_api_key.is_empty() { "EMPTY" } else { "SET" }
+                );
+                config.save_encrypted(CONFIG_PATH, pass)
+            } else {
+                config.save(CONFIG_PATH)
+            }
+        })
     })
 }
 

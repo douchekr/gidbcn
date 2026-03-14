@@ -197,6 +197,11 @@ impl Config {
     /// 암호화하여 BootConfig 형태로 저장
     pub fn save_encrypted(&self, path: &str, passphrase: &str) -> Result<()> {
         let secrets = self.extract_secrets();
+        tracing::debug!(
+            "save_encrypted: watchlist.gemini_api_key={}, kis_api.app_key={}",
+            if secrets.watchlist.gemini_api_key.is_empty() { "EMPTY" } else { "SET" },
+            if secrets.kis_api.app_key.is_empty() { "EMPTY" } else { "SET" },
+        );
         let secrets_json = serde_json::to_string(&secrets)?;
         let encrypted_b64 = crate::crypto::encrypt_to_base64(&secrets_json, passphrase)?;
 

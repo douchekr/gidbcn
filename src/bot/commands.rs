@@ -1532,6 +1532,8 @@ pub async fn handle_locked_command(
             // 복호화 시도
             match boot.clone().decrypt_into_config(&passphrase) {
                 Ok(config) => {
+                    // 패스프레이즈 저장 (update_config에서 암호화 저장용)
+                    storage::set_passphrase(&passphrase);
                     // unlock 채널로 config 전송
                     let mut tx_guard = unlock_tx.lock().await;
                     if let Some(tx) = tx_guard.take() {
@@ -1575,10 +1577,19 @@ async fn cmd_encrypt(bot: &Bot, chat_id: ChatId, msg_id: teloxide::types::Messag
     let config_path = storage::CONFIG_PATH;
 
     // 현재 config를 암호화하여 저장
-    let result = storage::with_config(|config| config.save_encrypted(config_path, passphrase));
+    let result = storage::with_config(|config| {
+        tracing::info!(
+            "encrypt: watchlist.gemini_api_key={}, model={}",
+            if config.watchlist.gemini_api_key.is_empty() { "EMPTY" } else { "SET" },
+            config.watchlist.gemini_model,
+        );
+        config.save_encrypted(config_path, passphrase)
+    });
 
     match result {
         Ok(_) => {
+            // 패스프레이즈 저장 (이후 update_config에서 암호화 저장용)
+            storage::set_passphrase(passphrase);
             tracing::info!("config 암호화 완료");
             "✅ 설정 암호화 완료!\n\n\
              다음 재시작부터 /unlock [패스프레이즈]로 잠금 해제해야 합니다.\n\
