@@ -112,7 +112,13 @@ pub async fn handle_command(
         Command::Ping => "pong".to_string(),
         Command::Port(args) | Command::P(args) => cmd_port(user_id, &args, &api).await,
         Command::Signal(args) | Command::S(args) => cmd_signal(user_id, &args),
-        Command::Watch(args) | Command::W(args) => cmd_watchlist(&args, &api).await,
+        Command::Watch(args) | Command::W(args) => {
+            if !is_owner {
+                "이 명령어는 봇 오너만 사용할 수 있습니다.".to_string()
+            } else {
+                cmd_watchlist(&args, &api).await
+            }
+        }
         Command::Status | Command::St => cmd_status(user_id),
         Command::User(args) => {
             if !is_owner {
