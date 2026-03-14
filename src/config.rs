@@ -74,6 +74,8 @@ impl Default for LogConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WatchlistConfig {
+    /// 암호화 모드에서는 Secrets에 저장. 평문 모드에서는 여기에 직접.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub gemini_api_key: String,
     #[serde(default = "default_gemini_model")]
     pub gemini_model: String,
@@ -83,6 +85,8 @@ pub struct WatchlistConfig {
     pub candidate_count: usize,
     #[serde(default = "default_discovery_interval")]
     pub discovery_interval_hours: u64,
+    #[serde(default = "default_min_score")]
+    pub min_score: f64,
 }
 
 impl Default for WatchlistConfig {
@@ -93,6 +97,7 @@ impl Default for WatchlistConfig {
             max_gemini_calls_per_day: default_max_gemini_calls(),
             candidate_count: default_candidate_count(),
             discovery_interval_hours: default_discovery_interval(),
+            min_score: default_min_score(),
         }
     }
 }
@@ -101,12 +106,20 @@ fn default_gemini_model() -> String { "gemini-2.5-flash".to_string() }
 fn default_max_gemini_calls() -> usize { 250 }
 fn default_candidate_count() -> usize { 30 }
 fn default_discovery_interval() -> u64 { 1 }
+fn default_min_score() -> f64 { 60.0 }
 
-/// 암호화 대상 민감 설정
+/// 암호화 대상 민감 설정 (플랫 구조)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Secrets {
-    pub kis_api: KisApiConfig,
-    pub watchlist: WatchlistConfig,
+    pub kis_app_key: String,
+    pub kis_app_secret: String,
+    pub kis_base_url: String,
+    pub kis_hts_id: String,
+    #[serde(default)]
+    pub kis_access_token: Option<String>,
+    #[serde(default)]
+    pub kis_expires_at: Option<DateTime<FixedOffset>>,
+    pub gemini_api_key: String,
 }
 
 /// 봇 기동용 최소 설정 (평문 부분만)
@@ -117,14 +130,14 @@ pub struct BootConfig {
     pub scheduler: SchedulerConfig,
     #[serde(default)]
     pub log: LogConfig,
+    #[serde(default)]
+    pub watchlist: Option<WatchlistConfig>,
     /// 암호화된 민감 설정 (base64). 없으면 평문 모드.
     #[serde(default)]
     pub encrypted_secrets: Option<String>,
-    // 평문 모드 하위 호환: 암호화 전에는 이 필드들이 존재
+    // 평문 모드 하위 호환: 암호화 전에는 이 필드가 존재
     #[serde(default)]
     pub kis_api: Option<KisApiConfig>,
-    #[serde(default)]
-    pub watchlist: Option<WatchlistConfig>,
 }
 
 impl BootConfig {
@@ -159,12 +172,32 @@ impl BootConfig {
         let json = crate::crypto::decrypt_from_base64(&b64, passphrase)?;
         let secrets: Secrets = serde_json::from_str(&json)
             .context("복호화된 secrets JSON 파싱 실패")?;
+
+        // Secrets → KisApiConfig 복원
+        let kis_api = KisApiConfig {
+            app_key: secrets.kis_app_key,
+            app_secret: secrets.kis_app_secret,
+            base_url: secrets.kis_base_url,
+            hts_id: secrets.kis_hts_id,
+            token: match (secrets.kis_access_token, secrets.kis_expires_at) {
+                (Some(tok), Some(exp)) if !tok.is_empty() => Some(TokenInfo {
+                    access_token: tok,
+                    expires_at: exp,
+                }),
+                _ => None,
+            },
+        };
+
+        // watchlist: 평문 설정 + gemini_api_key 복원
+        let mut watchlist = self.watchlist.unwrap_or_default();
+        watchlist.gemini_api_key = secrets.gemini_api_key;
+
         Ok(Config {
-            kis_api: secrets.kis_api,
+            kis_api,
             telegram: self.telegram,
             scheduler: self.scheduler,
             log: self.log,
-            watchlist: secrets.watchlist,
+            watchlist,
         })
     }
 }
@@ -186,11 +219,20 @@ impl Config {
         Ok(())
     }
 
-    /// 민감 설정 추출
-    pub fn extract_secrets(&self) -> Secrets {
+    /// 민감 설정을 플랫 Secrets로 추출
+    fn extract_secrets(&self) -> Secrets {
+        let (access_token, expires_at) = match &self.kis_api.token {
+            Some(t) => (Some(t.access_token.clone()), Some(t.expires_at)),
+            None => (None, None),
+        };
         Secrets {
-            kis_api: self.kis_api.clone(),
-            watchlist: self.watchlist.clone(),
+            kis_app_key: self.kis_api.app_key.clone(),
+            kis_app_secret: self.kis_api.app_secret.clone(),
+            kis_base_url: self.kis_api.base_url.clone(),
+            kis_hts_id: self.kis_api.hts_id.clone(),
+            kis_access_token: access_token,
+            kis_expires_at: expires_at,
+            gemini_api_key: self.watchlist.gemini_api_key.clone(),
         }
     }
 
@@ -198,18 +240,22 @@ impl Config {
     pub fn save_encrypted(&self, path: &str, passphrase: &str) -> Result<()> {
         let secrets = self.extract_secrets();
         tracing::debug!(
-            "save_encrypted: watchlist.gemini_api_key={}, kis_api.app_key={}",
-            if secrets.watchlist.gemini_api_key.is_empty() { "EMPTY" } else { "SET" },
-            if secrets.kis_api.app_key.is_empty() { "EMPTY" } else { "SET" },
+            "save_encrypted: gemini_api_key={}, kis_app_key={}",
+            if secrets.gemini_api_key.is_empty() { "EMPTY" } else { "SET" },
+            if secrets.kis_app_key.is_empty() { "EMPTY" } else { "SET" },
         );
         let secrets_json = serde_json::to_string(&secrets)?;
         let encrypted_b64 = crate::crypto::encrypt_to_base64(&secrets_json, passphrase)?;
 
-        // 평문 부분만 + encrypted_secrets
+        // watchlist 평문 (gemini_api_key 제외 — skip_serializing_if = is_empty)
+        let mut watchlist_plain = self.watchlist.clone();
+        watchlist_plain.gemini_api_key = String::new();
+
         let boot = serde_json::json!({
             "telegram": self.telegram,
             "scheduler": self.scheduler,
             "log": self.log,
+            "watchlist": watchlist_plain,
             "encrypted_secrets": encrypted_b64,
         });
 
@@ -225,13 +271,17 @@ impl Config {
         let secrets = self.extract_secrets();
         let secrets_json = serde_json::to_string(&secrets)?;
         let encrypted_b64 = crate::crypto::encrypt_to_base64(&secrets_json, passphrase)?;
+
+        let mut watchlist_plain = self.watchlist.clone();
+        watchlist_plain.gemini_api_key = String::new();
+
         Ok(BootConfig {
             telegram: self.telegram.clone(),
             scheduler: self.scheduler.clone(),
             log: self.log.clone(),
+            watchlist: Some(watchlist_plain),
             encrypted_secrets: Some(encrypted_b64),
             kis_api: None,
-            watchlist: None,
         })
     }
 }
@@ -247,7 +297,12 @@ mod tests {
                 app_secret: "test_secret_456".to_string(),
                 base_url: "https://api.example.com".to_string(),
                 hts_id: "testid".to_string(),
-                token: None,
+                token: Some(TokenInfo {
+                    access_token: "tok_abc".to_string(),
+                    expires_at: chrono::Utc::now().with_timezone(
+                        &FixedOffset::east_opt(9 * 3600).unwrap(),
+                    ),
+                }),
             },
             telegram: TelegramConfig {
                 bot_token: "123:ABC".to_string(),
@@ -258,6 +313,7 @@ mod tests {
             log: LogConfig::default(),
             watchlist: WatchlistConfig {
                 gemini_api_key: "gemini_key_789".to_string(),
+                min_score: 70.0,
                 ..Default::default()
             },
         }
@@ -273,16 +329,20 @@ mod tests {
         // 암호화 모드 확인
         assert!(boot.is_encrypted());
         assert!(boot.kis_api.is_none());
-        assert!(boot.watchlist.is_none());
+        // watchlist 평문 존재 (키 제외)
+        let wl = boot.watchlist.as_ref().unwrap();
+        assert!(wl.gemini_api_key.is_empty());
+        assert_eq!(wl.min_score, 70.0);
         // 평문 부분 보존
         assert_eq!(boot.telegram.bot_token, "123:ABC");
-        assert_eq!(boot.telegram.owner_chat_id, 42);
 
         // 복호화
         let restored = boot.decrypt_into_config(passphrase).unwrap();
         assert_eq!(restored.kis_api.app_key, "test_key_123");
         assert_eq!(restored.kis_api.app_secret, "test_secret_456");
+        assert_eq!(restored.kis_api.token.as_ref().unwrap().access_token, "tok_abc");
         assert_eq!(restored.watchlist.gemini_api_key, "gemini_key_789");
+        assert_eq!(restored.watchlist.min_score, 70.0);
         assert_eq!(restored.telegram.bot_token, "123:ABC");
     }
 
@@ -314,10 +374,31 @@ mod tests {
         let config = make_test_config();
         let boot = config.encrypt_to_boot("pass123").unwrap();
 
-        // encrypted_secrets blob에 평문 키가 직접 포함되지 않아야 함
         let blob = boot.encrypted_secrets.as_ref().unwrap();
         assert!(!blob.contains("test_key_123"));
         assert!(!blob.contains("test_secret_456"));
         assert!(!blob.contains("gemini_key_789"));
+    }
+
+    #[test]
+    fn secrets_flat_structure() {
+        let config = make_test_config();
+        let secrets = config.extract_secrets();
+        assert_eq!(secrets.kis_app_key, "test_key_123");
+        assert_eq!(secrets.kis_app_secret, "test_secret_456");
+        assert_eq!(secrets.kis_base_url, "https://api.example.com");
+        assert_eq!(secrets.kis_hts_id, "testid");
+        assert_eq!(secrets.kis_access_token.as_deref(), Some("tok_abc"));
+        assert_eq!(secrets.gemini_api_key, "gemini_key_789");
+    }
+
+    #[test]
+    fn watchlist_plaintext_no_key() {
+        let config = make_test_config();
+        let boot = config.encrypt_to_boot("pass").unwrap();
+        // 평문 watchlist에 gemini_api_key 없음
+        let wl_json = serde_json::to_string(boot.watchlist.as_ref().unwrap()).unwrap();
+        assert!(!wl_json.contains("gemini_key_789"));
+        assert!(wl_json.contains("gemini-2.5-flash"));
     }
 }

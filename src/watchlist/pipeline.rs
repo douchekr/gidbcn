@@ -142,15 +142,20 @@ pub async fn run_discovery_cycle(
         }
     };
 
-    // 4. DB 업데이트
+    // 4. DB 업데이트 + 기준 점수 미달 → 블랙리스트 (처단)
+    let min_score = crate::storage::with_config(|c| c.watchlist.min_score);
     for jr in &judge_results {
         let ticker = jr.ticker.to_uppercase();
-        // pending 목록에서 매칭되는 후보 찾기
         if let Some(candidate) = pending.iter().find(|c| c.ticker == ticker) {
             if let Err(e) = db::update_candidate_judge(candidate.id, jr.score, &jr.verdict) {
                 report.errors.push(format!("{ticker} DB 업데이트 실패: {e}"));
             } else {
                 report.judged += 1;
+                if jr.score < min_score {
+                    let reason = format!("처단: {:.0}점 < 기준 {:.0}점", jr.score, min_score);
+                    let _ = db::add_blacklist(&ticker, &reason);
+                    let _ = db::update_candidate_status(candidate.id, CandidateStatus::Blacklisted);
+                }
             }
         }
     }
