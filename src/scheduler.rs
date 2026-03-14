@@ -39,8 +39,10 @@ fn kst_now() -> chrono::DateTime<FixedOffset> {
 
 fn is_market_hours() -> bool {
     let kst = kst_now();
-    let hour = kst.hour();
-    let min = kst.minute();
+    is_market_hours_at(kst.hour(), kst.minute())
+}
+
+fn is_market_hours_at(hour: u32, min: u32) -> bool {
     let hhmm = hour * 100 + min;
 
     // KRX: 09:00~15:30 KST
@@ -50,4 +52,52 @@ fn is_market_hours() -> bool {
     let us_open = hhmm >= 2230 || hhmm <= 500;
 
     krx_open || us_open
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn krx_market_hours() {
+        assert!(is_market_hours_at(9, 0));   // 09:00 개장
+        assert!(is_market_hours_at(12, 30)); // 점심
+        assert!(is_market_hours_at(15, 30)); // 15:30 마감
+    }
+
+    #[test]
+    fn krx_outside_hours() {
+        assert!(!is_market_hours_at(8, 59));  // 개장 전
+        assert!(!is_market_hours_at(15, 31)); // 마감 후
+    }
+
+    #[test]
+    fn us_market_hours_kst() {
+        assert!(is_market_hours_at(22, 30)); // 22:30 개장
+        assert!(is_market_hours_at(23, 0));
+        assert!(is_market_hours_at(0, 0));   // 자정
+        assert!(is_market_hours_at(3, 30));
+        assert!(is_market_hours_at(5, 0));   // 05:00 마감
+    }
+
+    #[test]
+    fn us_outside_hours_kst() {
+        assert!(!is_market_hours_at(5, 1));   // 마감 후
+        assert!(!is_market_hours_at(22, 29)); // 개장 전
+    }
+
+    #[test]
+    fn gap_between_markets() {
+        // KRX 마감 ~ US 개장 사이
+        assert!(!is_market_hours_at(16, 0));
+        assert!(!is_market_hours_at(20, 0));
+        assert!(!is_market_hours_at(22, 0));
+    }
+
+    #[test]
+    fn gap_morning() {
+        // US 마감 ~ KRX 개장 사이
+        assert!(!is_market_hours_at(6, 0));
+        assert!(!is_market_hours_at(8, 0));
+    }
 }
