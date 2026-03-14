@@ -78,6 +78,10 @@ pub async fn run_cycle(
         collect_failed: 0,
     };
 
+    // 0. 오래된 데이터 정리
+    let retention = crate::storage::with_config(|c| c.watchlist.retention_days);
+    let _ = db::cleanup_old_data(retention);
+
     // 1. 사냥
     let candidates = gemini::hunt(http_client).await
         .context("사냥 실패")?;

@@ -104,6 +104,8 @@ pub struct WatchlistConfig {
     pub hunt_interval_minutes: u64,
     #[serde(default = "default_min_score")]
     pub min_score: f64,
+    #[serde(default = "default_retention_days")]
+    pub retention_days: u32,
 }
 
 impl Default for WatchlistConfig {
@@ -114,6 +116,7 @@ impl Default for WatchlistConfig {
             candidate_count: default_candidate_count(),
             hunt_interval_minutes: default_hunt_interval(),
             min_score: default_min_score(),
+            retention_days: default_retention_days(),
         }
     }
 }
@@ -123,6 +126,7 @@ fn default_max_gemini_calls() -> usize { 250 }
 fn default_candidate_count() -> usize { 30 }
 fn default_hunt_interval() -> u64 { 30 }
 fn default_min_score() -> f64 { 60.0 }
+fn default_retention_days() -> u32 { 100 }
 
 // --- 디스크 포맷: BootConfig ---
 // secrets 필드가 object면 평문, string이면 암호화

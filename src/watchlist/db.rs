@@ -378,6 +378,48 @@ pub fn gemini_calls_today() -> Result<usize> {
     })
 }
 
+// --- Retention (오래된 데이터 정리) ---
+
+/// retention_days보다 오래된 judged/blacklisted candidates + prompt_history + api_usage 삭제
+pub fn cleanup_old_data(retention_days: u32) -> Result<usize> {
+    with_db(|conn| {
+        let cutoff = chrono::Utc::now()
+            .checked_sub_signed(chrono::Duration::days(retention_days as i64))
+            .unwrap_or_else(chrono::Utc::now)
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+
+        let mut total = 0usize;
+
+        // judged/blacklisted candidates
+        let n = conn.execute(
+            "DELETE FROM candidates WHERE status IN ('judged', 'blacklisted') AND created_at < ?1",
+            params![cutoff],
+        )?;
+        total += n;
+
+        // prompt_history
+        let n = conn.execute(
+            "DELETE FROM prompt_history WHERE created_at < ?1",
+            params![cutoff],
+        )?;
+        total += n;
+
+        // api_usage
+        let n = conn.execute(
+            "DELETE FROM api_usage WHERE called_at < ?1",
+            params![cutoff],
+        )?;
+        total += n;
+
+        if total > 0 {
+            tracing::info!("데이터 정리: {total}건 삭제 (기준: {retention_days}일)");
+        }
+
+        Ok(total)
+    })
+}
+
 // --- Holdings (portfolio) ---
 
 pub fn load_holdings(user_id: i64) -> Result<PortfolioStore> {
