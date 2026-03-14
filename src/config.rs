@@ -81,6 +81,8 @@ pub struct WatchlistConfig {
     pub max_gemini_calls_per_day: usize,
     #[serde(default = "default_candidate_count")]
     pub candidate_count: usize,
+    #[serde(default = "default_discovery_interval")]
+    pub discovery_interval_hours: u64,
 }
 
 impl Default for WatchlistConfig {
@@ -90,6 +92,7 @@ impl Default for WatchlistConfig {
             gemini_model: default_gemini_model(),
             max_gemini_calls_per_day: default_max_gemini_calls(),
             candidate_count: default_candidate_count(),
+            discovery_interval_hours: default_discovery_interval(),
         }
     }
 }
@@ -97,6 +100,7 @@ impl Default for WatchlistConfig {
 fn default_gemini_model() -> String { "gemini-2.5-flash".to_string() }
 fn default_max_gemini_calls() -> usize { 250 }
 fn default_candidate_count() -> usize { 30 }
+fn default_discovery_interval() -> u64 { 8 }
 
 /// 암호화 대상 민감 설정
 #[derive(Debug, Clone, Serialize, Deserialize)]

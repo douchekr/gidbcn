@@ -1,3 +1,6 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use chrono::{FixedOffset, Timelike, Utc};
 use teloxide::prelude::*;
 use tokio::time::{interval, Duration};
@@ -5,27 +8,70 @@ use tokio::time::{interval, Duration};
 use crate::api::ApiHandle;
 use crate::signal::engine;
 use crate::storage;
+use crate::watchlist::{db as wdb, models::PromptType, pipeline};
 
 pub async fn run_scheduler(
     api: ApiHandle,
     bot: Bot,
+    discovery_enabled: Arc<AtomicBool>,
 ) {
     let interval_min = storage::with_config(|c| c.scheduler.signal_check_interval_minutes);
     let signal_interval = Duration::from_secs(interval_min * 60);
     let mut signal_tick = interval(signal_interval);
 
-    tracing::info!("Scheduler started: signal check every {interval_min}min");
+    let discovery_hours = storage::with_config(|c| c.watchlist.discovery_interval_hours);
+    let discovery_interval = Duration::from_secs(discovery_hours * 3600);
+    let mut discovery_tick = interval(discovery_interval);
+
+    tracing::info!("Scheduler started: signal check every {interval_min}min, discovery every {discovery_hours}h");
 
     loop {
-        signal_tick.tick().await;
-        if is_market_hours() {
-            let user_ids = storage::list_user_ids();
-            if user_ids.is_empty() {
-                tracing::debug!("No users with portfolios, skipping signal check");
-            } else {
-                tracing::info!("Running signal check for {} users...", user_ids.len());
-                for user_id in user_ids {
-                    engine::check_all_signals(&api, &bot, user_id).await;
+        tokio::select! {
+            _ = signal_tick.tick() => {
+                if is_market_hours() {
+                    let user_ids = storage::list_user_ids();
+                    if user_ids.is_empty() {
+                        tracing::debug!("No users with portfolios, skipping signal check");
+                    } else {
+                        tracing::info!("Running signal check for {} users...", user_ids.len());
+                        for user_id in user_ids {
+                            engine::check_all_signals(&api, &bot, user_id).await;
+                        }
+                    }
+                }
+            }
+            _ = discovery_tick.tick() => {
+                if !discovery_enabled.load(Ordering::SeqCst) {
+                    continue;
+                }
+
+                // 프롬프트 설정 확인
+                let hunt_ok = wdb::get_prompt(PromptType::Hunt).ok().flatten().is_some();
+                let judge_ok = wdb::get_prompt(PromptType::Judge).ok().flatten().is_some();
+                if !hunt_ok || !judge_ok {
+                    tracing::debug!("Discovery skipped: prompts not configured");
+                    continue;
+                }
+
+                tracing::info!("Running scheduled discovery cycle...");
+                let client = reqwest::Client::new();
+                let owner_id = storage::with_config(|c| c.telegram.owner_chat_id);
+
+                match pipeline::run_discovery_cycle(&api, &client).await {
+                    Ok(report) => {
+                        let msg = format!("🔄 자동 디스커버리 완료\n\n{}", report.summary());
+                        tracing::info!("Scheduled discovery completed");
+                        if owner_id != 0 {
+                            let _ = bot.send_message(ChatId(owner_id), &msg).await;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Scheduled discovery failed: {e:#}");
+                        if owner_id != 0 {
+                            let msg = format!("❌ 자동 디스커버리 실패\n{e:#}");
+                            let _ = bot.send_message(ChatId(owner_id), &msg).await;
+                        }
+                    }
                 }
             }
         }

@@ -12,7 +12,7 @@ use crate::config::BootConfig;
 use crate::models::messages::PriceData;
 use crate::models::portfolio::{Holding, Market};
 use crate::models::signal::{Condition, Signal};
-use crate::watchlist::{db as wdb, models::PromptType, pipeline};
+use crate::watchlist::{db as wdb, models::PromptType};
 use uuid::Uuid;
 use crate::storage;
 
@@ -54,6 +54,7 @@ pub async fn handle_command(
     msg: Message,
     cmd: Command,
     api: ApiHandle,
+    discovery_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> ResponseResult<()> {
     let chat_id = msg.chat.id;
 
@@ -123,7 +124,7 @@ pub async fn handle_command(
             if !is_owner {
                 "이 명령어는 봇 오너만 사용할 수 있습니다.".to_string()
             } else {
-                cmd_watchlist(&args, &api).await
+                cmd_watchlist(&args, &api, &discovery_enabled).await
             }
         }
         Command::Status | Command::St => cmd_status(user_id),
@@ -1255,13 +1256,49 @@ fn cmd_status(user_id: i64) -> String {
 
 // --- 워치리스트 ---
 
-async fn cmd_watchlist(args: &str, api: &ApiHandle) -> String {
+async fn cmd_watchlist(
+    args: &str,
+    _api: &ApiHandle,
+    discovery_enabled: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> String {
+    use std::sync::atomic::Ordering;
+
     let parts: Vec<&str> = args.split_whitespace().collect();
     let sub = parts.first().copied().unwrap_or("");
     let rest = parts.get(1..).unwrap_or(&[]).join(" ");
 
     match sub {
-        "run" => cmd_watch_run(api).await,
+        "run" => {
+            // 프롬프트 설정 확인
+            let hunt = wdb::get_prompt(PromptType::Hunt).ok().flatten();
+            let judge = wdb::get_prompt(PromptType::Judge).ok().flatten();
+            if hunt.is_none() || judge.is_none() {
+                let mut missing = Vec::new();
+                if hunt.is_none() { missing.push("hunt (사냥용)"); }
+                if judge.is_none() { missing.push("judge (처단용)"); }
+                return format!(
+                    "⚠️ 프롬프트 미설정: {}\n\n\
+                     /w prompt hunt set [내용]\n\
+                     /w prompt judge set [내용]",
+                    missing.join(", ")
+                );
+            }
+
+            if discovery_enabled.load(Ordering::SeqCst) {
+                return "이미 디스커버리가 실행 중입니다.".to_string();
+            }
+
+            discovery_enabled.store(true, Ordering::SeqCst);
+            let hours = storage::with_config(|c| c.watchlist.discovery_interval_hours);
+            format!("🔍 디스커버리 시작! ({hours}시간 주기로 자동 실행)\n/w stop 으로 중지")
+        }
+        "stop" => {
+            if !discovery_enabled.load(Ordering::SeqCst) {
+                return "디스커버리가 실행 중이 아닙니다.".to_string();
+            }
+            discovery_enabled.store(false, Ordering::SeqCst);
+            "⏹ 디스커버리 중지".to_string()
+        }
         "list" | "ls" => cmd_watch_list(),
         "pending" => cmd_watch_pending(),
         "info" | "i" => cmd_watch_info(&rest.to_uppercase()),
@@ -1270,7 +1307,8 @@ async fn cmd_watchlist(args: &str, api: &ApiHandle) -> String {
         "prompt" => cmd_watch_prompt(&rest),
         "history" | "hist" => cmd_watch_history(),
         _ => "📋 워치리스트 명령어\n\n\
-              /w run — 디스커버리 사이클 실행\n\
+              /w run — 디스커버리 시작 (자동 주기 실행)\n\
+              /w stop — 디스커버리 중지\n\
               /w ls — 평가 완료 종목 (점수순)\n\
               /w pending — 대기 중 후보\n\
               /w info [TICKER] — 종목 상세\n\
@@ -1285,30 +1323,6 @@ async fn cmd_watchlist(args: &str, api: &ApiHandle) -> String {
     }
 }
 
-async fn cmd_watch_run(api: &ApiHandle) -> String {
-    // 프롬프트 설정 확인
-    let hunt = wdb::get_prompt(PromptType::Hunt).ok().flatten();
-    let judge = wdb::get_prompt(PromptType::Judge).ok().flatten();
-    if hunt.is_none() || judge.is_none() {
-        let mut missing = Vec::new();
-        if hunt.is_none() { missing.push("hunt (사냥용)"); }
-        if judge.is_none() { missing.push("judge (처단용)"); }
-        return format!(
-            "⚠️ 프롬프트 미설정: {}\n\n\
-             /w prompt hunt set [내용]\n\
-             /w prompt judge set [내용]",
-            missing.join(", ")
-        );
-    }
-
-    // reqwest 클라이언트 생성 (Gemini 호출용, 한투 API Actor와 별도)
-    let client = reqwest::Client::new();
-
-    match pipeline::run_discovery_cycle(api, &client).await {
-        Ok(report) => format!("✅ 디스커버리 완료\n\n{}", report.summary()),
-        Err(e) => format!("❌ 디스커버리 실패\n{e:#}"),
-    }
-}
 
 fn cmd_watch_list() -> String {
     use crate::watchlist::models::CandidateStatus;

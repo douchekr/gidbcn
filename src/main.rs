@@ -83,9 +83,12 @@ async fn async_main() {
         let tg_bot = Bot::new(&bot_token);
 
         // unlock 수신 → 정상 모드 전환 (spawn_local 컨텍스트)
+        let discovery_enabled = Arc::new(AtomicBool::new(false));
+
         let api_handle2 = api_handle.clone();
         let tg_bot2 = tg_bot.clone();
         let locked2 = locked.clone();
+        let disc2 = discovery_enabled.clone();
         tokio::task::spawn_local(async move {
             if let Ok(config) = unlock_rx.await {
                 storage::init_config(config);
@@ -93,14 +96,14 @@ async fn async_main() {
                     tracing::error!("watchlist DB 초기화 실패: {e:#}");
                 }
                 tokio::task::spawn_local(run_api_actor(api_rx));
-                tokio::task::spawn_local(scheduler::run_scheduler(api_handle2, tg_bot2));
+                tokio::task::spawn_local(scheduler::run_scheduler(api_handle2, tg_bot2, disc2));
                 locked2.store(false, Ordering::SeqCst);
                 tracing::info!("🔓 잠금 해제 완료 — 정상 모드");
             }
         });
 
         // 봇 실행 (잠금 상태 포함)
-        bot::run_bot_with_lock(api_handle, locked, unlock_tx, boot).await;
+        bot::run_bot_with_lock(api_handle, locked, unlock_tx, boot, discovery_enabled).await;
     } else {
         // === 평문 모드: 기존 흐름 ===
         let config = match boot.into_plaintext_config() {
@@ -152,10 +155,12 @@ async fn async_main() {
 
         tokio::task::spawn_local(run_api_actor(api_rx));
 
+        let discovery_enabled = Arc::new(AtomicBool::new(false));
         let tg_bot = Bot::new(&bot_token);
         tokio::task::spawn_local(scheduler::run_scheduler(
             api_handle.clone(),
             tg_bot.clone(),
+            discovery_enabled.clone(),
         ));
 
         tracing::info!("Bot and scheduler running (plaintext mode)");
@@ -174,7 +179,7 @@ async fn async_main() {
             }
         }
 
-        bot::run_bot(api_handle).await;
+        bot::run_bot(api_handle, discovery_enabled).await;
     }
 }
 
