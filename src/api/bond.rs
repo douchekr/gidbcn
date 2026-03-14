@@ -22,7 +22,7 @@ pub async fn get_price(ctx: &ActorContext, isin: &str) -> Result<BondData> {
 
     let status = http_resp.status();
     let body = http_resp.text().await.context("Bond price body read failed")?;
-    let resp: serde_json::Value = serde_json::from_str(&body).with_context(|| {
+    let _resp: serde_json::Value = serde_json::from_str(&body).with_context(|| {
         format!("Bond price parse failed (HTTP {status}): {body}")
     })?;
 

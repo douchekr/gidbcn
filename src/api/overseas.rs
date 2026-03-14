@@ -21,7 +21,7 @@ pub async fn get_price(ctx: &ActorContext, exchange: &str, symbol: &str) -> Resu
         )
         .await
         .context("Overseas price request failed")?;
-    let status = http_resp.status();
+    let _status = http_resp.status();
     let body = http_resp.text().await.context("Overseas price body read failed")?;
 
     parse_price_response(&body)
@@ -58,7 +58,7 @@ pub async fn get_detail(ctx: &ActorContext, exchange: &str, symbol: &str) -> Res
         )
         .await
         .context("Overseas detail request failed")?;
-    let status = http_resp.status();
+    let _status = http_resp.status();
     let body = http_resp.text().await.context("Overseas detail body read failed")?;
 
     parse_detail_response(&body)

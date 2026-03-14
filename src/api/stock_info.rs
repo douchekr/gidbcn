@@ -20,7 +20,7 @@ pub async fn get_stock_name(ctx: &ActorContext, prdt_type_cd: &str, pdno: &str) 
         .await
         .context("Stock info request failed")?;
     let body = http_resp.text().await.context("Stock info body read failed")?;
-    let resp: serde_json::Value =
+    let _resp: serde_json::Value =
         serde_json::from_str(&body).context("Stock info parse failed")?;
 
     parse_stock_name_response(&body)

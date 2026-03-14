@@ -29,6 +29,7 @@ pub struct OverseasDetail {
     pub bps: f64,
     pub shares: f64,
     pub volume: f64,
+    #[allow(dead_code)]
     pub volume_amount: f64,
     pub high_52w: f64,
     pub low_52w: f64,

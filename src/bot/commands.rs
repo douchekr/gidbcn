@@ -1550,7 +1550,7 @@ pub async fn handle_locked_command(
 
 // --- 암호화 마이그레이션 ---
 
-async fn cmd_encrypt(bot: &Bot, chat_id: ChatId, args: &str) -> String {
+async fn cmd_encrypt(_bot: &Bot, _chat_id: ChatId, args: &str) -> String {
     let passphrase = args.trim();
     if passphrase.is_empty() {
         return "사용법: /encrypt [패스프레이즈]\n\n\

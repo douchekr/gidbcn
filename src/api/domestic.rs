@@ -26,7 +26,7 @@ pub async fn get_price(ctx: &ActorContext, symbol: &str) -> Result<PriceData> {
     let status = http_resp.status();
     let body = http_resp.text().await.context("Domestic price body read failed")?;
 
-    let resp: serde_json::Value = serde_json::from_str(&body).with_context(|| {
+    let _resp: serde_json::Value = serde_json::from_str(&body).with_context(|| {
         format!("Domestic price parse failed (HTTP {status}): {body}")
     })?;
 

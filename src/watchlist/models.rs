@@ -44,6 +44,7 @@ impl CandidateStatus {
 
 /// 블랙리스트 종목
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct BlacklistEntry {
     pub id: i64,
     pub ticker: String,
@@ -53,6 +54,7 @@ pub struct BlacklistEntry {
 
 /// Gemini 호출 이력
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct PromptRecord {
     pub id: i64,
     pub prompt_type: String,
@@ -100,6 +102,7 @@ impl PromptType {
         }
     }
 
+    #[allow(dead_code)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "hunt" => Some(Self::Hunt),

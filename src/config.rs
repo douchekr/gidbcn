@@ -166,6 +166,7 @@ impl BootConfig {
 }
 
 impl Config {
+    #[allow(dead_code)]
     pub fn load(path: &str) -> Result<Self> {
         let data = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read config: {path}"))?;
@@ -210,6 +211,7 @@ impl Config {
     }
 
     /// 메모리에서 암호화 → BootConfig (파일 저장 없이)
+    #[allow(dead_code)]
     pub fn encrypt_to_boot(&self, passphrase: &str) -> Result<BootConfig> {
         let secrets = self.extract_secrets();
         let secrets_json = serde_json::to_string(&secrets)?;
