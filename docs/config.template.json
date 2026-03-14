@@ -3,8 +3,7 @@
     "app_key": "YOUR_APP_KEY",
     "app_secret": "YOUR_APP_SECRET",
     "base_url": "https://openapi.koreainvestment.com:9443",
-    "hts_id": "YOUR_HTS_ID",
-    "token": null
+    "hts_id": "YOUR_HTS_ID"
   },
   "telegram": {
     "bot_token": "YOUR_BOT_TOKEN",
@@ -19,9 +18,11 @@
     "retain_days": 7
   },
   "watchlist": {
-    "gemini_api_key": "",
+    "gemini_api_key": "YOUR_GEMINI_API_KEY",
     "gemini_model": "gemini-2.5-flash",
     "max_gemini_calls_per_day": 250,
-    "candidate_count": 30
+    "candidate_count": 30,
+    "discovery_interval_hours": 1,
+    "min_score": 60.0
   }
 }
