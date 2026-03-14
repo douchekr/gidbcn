@@ -139,7 +139,7 @@ pub async fn handle_command(
             if !is_owner {
                 "이 명령어는 봇 오너만 사용할 수 있습니다.".to_string()
             } else {
-                cmd_encrypt(&bot, chat_id, &args).await
+                cmd_encrypt(&bot, chat_id, msg.id, &args).await
             }
         }
     };
@@ -1550,7 +1550,10 @@ pub async fn handle_locked_command(
 
 // --- 암호화 마이그레이션 ---
 
-async fn cmd_encrypt(_bot: &Bot, _chat_id: ChatId, args: &str) -> String {
+async fn cmd_encrypt(bot: &Bot, chat_id: ChatId, msg_id: teloxide::types::MessageId, args: &str) -> String {
+    // 패스프레이즈 노출 방지: 메시지 즉시 삭제
+    let _ = bot.delete_message(chat_id, msg_id).await;
+
     let passphrase = args.trim();
     if passphrase.is_empty() {
         return "사용법: /encrypt [패스프레이즈]\n\n\
@@ -1558,10 +1561,6 @@ async fn cmd_encrypt(_bot: &Bot, _chat_id: ChatId, args: &str) -> String {
                 ⚠️ 패스프레이즈를 분실하면 설정을 복구할 수 없습니다!"
             .to_string();
     }
-
-    // 메시지 삭제 시도 (패스프레이즈 노출 방지)
-    // chat_id에서 최근 메시지 삭제는 bot이 admin이어야 하므로 실패할 수 있음
-    // DM에서는 deleteMessage가 동작함
 
     let config_path = storage::CONFIG_PATH;
 
