@@ -329,3 +329,40 @@ Mutex 없이 채널만으로 동시성 확보.
 - **BOND**: 가격이 액면 10,000원 기준, 수량이 1,000원 단위 → `× 0.1` 보정 (`Market::value_factor()`)
 - **해외주식**: `eval`은 달러 단위로 계산 후, 총합 합산 시 `× usd_krw`
 - **손익**: `(현재가 - 매입가) × qty × factor` (해외주식은 추가로 `× usd_krw`)
+
+---
+
+## 워치리스트 (US 소형주 디스커버리)
+
+### 개요
+미국 소형주($10 이하) 관심종목 수집/관리. Gemini AI + 한투 API 2-Track 구조.
+
+### 파이프라인
+```
+1. 사냥 (Gemini) → 후보 종목 목록
+2. 데이터 수집 (한투 API HHDFS76200200) → 시세/재무 상세
+3. 처단 (Gemini + 실데이터) → 점수(0~100) + 판결
+4. DB 업데이트 (SQLite watchlist.db)
+```
+
+### 프롬프트 관리
+- **사냥용 (hunt)**: 종목 발굴 기준. 사용자 설정 필수.
+- **처단용 (judge)**: 평가 기준. 사용자 설정 필수.
+- 기본 프롬프트 없음 — 미설정 시 디스커버리 불가.
+- DB `prompts` 테이블에 저장, 텔레그램에서 실시간 수정 가능.
+
+### 데이터 저장
+- **SQLite** (`/opt/kkuepark/gidbcn/watchlist.db`, WAL 모드)
+- `thread_local! RefCell<Option<Connection>>` — LocalSet 덕에 `!Send` OK
+- 테이블: candidates, blacklist, prompts, prompt_history, api_usage
+
+### Gemini API
+- 모델: gemini-2.5-flash (무료 티어)
+- 제한: 10 RPM, 250 RPD
+- Gemini 호출은 API Actor를 거치지 않음 (별도 reqwest::Client 직접 사용)
+- 한투 API 호출은 기존 API Actor 경유 (rate limit 준수)
+
+### 한투 API 확장
+- `OverseasDetail` 구조체: 기존 PriceData + 시총, PER, PBR, EPS, BPS, 거래량, 52주고저, 섹터
+- `overseas::get_detail()`: 동일 엔드포인트(HHDFS76200200)에서 전체 필드 파싱
+- `ApiRequest::GetOverseasDetail` + `ApiHandle::get_overseas_detail()`

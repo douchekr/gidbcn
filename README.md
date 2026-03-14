@@ -371,6 +371,31 @@ custtype: P
 - 미허용 유저가 명령 시 `"접근 권한이 없습니다. (chat_id: xxx)"` 응답 → owner가 필요 시 추가 가능
 - `owner_chat_id` 캐싱: `thread_local! Cell<Option<i64>>`으로 메모리 유지. 최초 1회만 config.json 읽음. 오너 등록 시 `set_owner_chat_id()` 호출로 즉시 갱신.
 
+### 워치리스트 (`/watch` 또는 `/w`)
+| 명령어 | 설명 |
+|---|---|
+| `/w run` | 디스커버리 사이클 실행 (사냥→데이터수집→처단) |
+| `/w ls` | 평가 완료 종목 (점수순) |
+| `/w pending` | 대기 중 후보 |
+| `/w info [TICKER]` | 종목 상세 |
+| `/w bl` | 블랙리스트 목록 |
+| `/w bl add [TICKER] [사유]` | 수동 블랙리스트 추가 |
+| `/w bl rm [TICKER]` | 블랙리스트 해제 |
+| `/w budget` | 오늘 Gemini API 사용량 |
+| `/w prompt hunt show` | 사냥용 프롬프트 확인 |
+| `/w prompt hunt set [내용]` | 사냥용 프롬프트 설정 |
+| `/w prompt judge show` | 처단용 프롬프트 확인 |
+| `/w prompt judge set [내용]` | 처단용 프롬프트 설정 |
+| `/w hist` | 최근 Gemini 호출 이력 |
+
+**2-Track 파이프라인**:
+1. **사냥** (Track 1): Gemini가 사용자 프롬프트 기반으로 후보 종목 수집
+2. **데이터 수집** (Track 2): 한투 API로 실제 시세/재무 데이터 확보
+3. **처단**: 실데이터를 Gemini에 넘겨 점수(0~100) + 판결
+
+프롬프트 미설정 시 `/w run` 불가. 사냥/처단 프롬프트를 각각 설정해야 동작.
+SQLite(`watchlist.db`)에 후보, 블랙리스트, 호출 이력 저장.
+
 ### 시스템
 | 명령어 | 설명 |
 |---|---|

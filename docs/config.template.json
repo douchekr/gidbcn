@@ -17,5 +17,11 @@
   "log": {
     "dir": "/opt/kkuepark/gidbcn",
     "retain_days": 7
+  },
+  "watchlist": {
+    "gemini_api_key": "",
+    "gemini_model": "gemini-2.5-flash",
+    "max_gemini_calls_per_day": 250,
+    "candidate_count": 30
   }
 }
