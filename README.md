@@ -537,3 +537,16 @@ uuid = { version = "1", features = ["v4"] }
 💱 USD/KRW: 1,450
 ```
 - `💱 USD/KRW` 줄: 미국 종목 평가금액이 0보다 클 때만 표시
+
+---
+
+## 개선사항
+
+### LocalSet + spawn_local 전환 검토
+현재 `tokio::spawn`으로 Actor를 띄우고 있음. `current_thread` 런타임이라 실질적 문제는 없지만, `LocalSet` + `spawn_local`로 전환하면:
+- `Rc<Cell<T>>`, `Rc<RefCell<T>>` 등 `!Send` 타입을 Actor 내부에서 자유롭게 사용 가능
+- `Send` 바운드 제거 → 타입 시그니처 간결해짐
+- GMainContext per-thread 의미론과 더 정확히 일치
+- 향후 멀티스레드 Actor 분리(thread::spawn + 독립 런타임) 시에도 동일 패턴 유지 가능
+
+**우선순위**: 낮음. 현재 동작에 문제 없으며, `!Send` 타입이 필요해지는 시점에 전환해도 충분.
