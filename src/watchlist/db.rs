@@ -378,6 +378,25 @@ pub fn gemini_calls_today() -> Result<usize> {
     })
 }
 
+// --- 일괄 삭제 ---
+
+pub fn clear_candidates_by_status(status: CandidateStatus) -> Result<usize> {
+    with_db(|conn| {
+        let n = conn.execute(
+            "DELETE FROM candidates WHERE status = ?1",
+            params![status.as_str()],
+        )?;
+        Ok(n)
+    })
+}
+
+pub fn clear_all_blacklist() -> Result<usize> {
+    with_db(|conn| {
+        let n = conn.execute("DELETE FROM blacklist", [])?;
+        Ok(n)
+    })
+}
+
 // --- Retention (오래된 데이터 정리) ---
 
 /// retention_days보다 오래된 judged/blacklisted candidates + prompt_history + api_usage 삭제

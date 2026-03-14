@@ -1320,9 +1320,10 @@ async fn cmd_watchlist(
         "budget" => cmd_watch_budget(),
         "prompt" => cmd_watch_prompt(&rest),
         "history" | "hist" => cmd_watch_history(),
+        "clear" => cmd_watch_clear(&rest),
         _ => "📋 워치리스트 명령어\n\n\
               /w run — 사냥 시작 (사냥/수집/평가 자동)\n\
-              /w stop — 디스커버리 중지\n\
+              /w stop — 사냥 중지\n\
               /w ls — 평가 완료 종목 (점수순)\n\
               /w pending — 대기 중 후보\n\
               /w info [TICKER] — 종목 상세\n\
@@ -1332,7 +1333,8 @@ async fn cmd_watchlist(
               /w budget — 오늘 Gemini 사용량\n\
               /w prompt hunt show|set\n\
               /w prompt judge show|set\n\
-              /w hist — 최근 호출 이력"
+              /w hist — 최근 호출 이력\n\
+              /w clear pending|judged|bl — 일괄 삭제"
             .to_string(),
     }
 }
@@ -1492,6 +1494,31 @@ fn cmd_watch_prompt(args: &str) -> String {
             }
         }
         _ => format!("사용법: /w prompt {} show|set [내용]", prompt_type.as_str()),
+    }
+}
+
+fn cmd_watch_clear(args: &str) -> String {
+    use crate::watchlist::models::CandidateStatus;
+    match args.trim() {
+        "pending" => {
+            match wdb::clear_candidates_by_status(CandidateStatus::Pending) {
+                Ok(n) => format!("🗑 pending {n}건 삭제"),
+                Err(e) => format!("삭제 실패: {e:#}"),
+            }
+        }
+        "judged" => {
+            match wdb::clear_candidates_by_status(CandidateStatus::Judged) {
+                Ok(n) => format!("🗑 judged {n}건 삭제"),
+                Err(e) => format!("삭제 실패: {e:#}"),
+            }
+        }
+        "bl" => {
+            match wdb::clear_all_blacklist() {
+                Ok(n) => format!("🗑 블랙리스트 {n}건 삭제"),
+                Err(e) => format!("삭제 실패: {e:#}"),
+            }
+        }
+        _ => "사용법: /w clear pending|judged|bl".to_string(),
     }
 }
 
