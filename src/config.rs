@@ -102,10 +102,6 @@ pub struct WatchlistConfig {
     pub candidate_count: usize,
     #[serde(default = "default_hunt_interval")]
     pub hunt_interval_minutes: u64,
-    #[serde(default = "default_collect_interval")]
-    pub collect_interval_minutes: u64,
-    #[serde(default = "default_evaluate_interval")]
-    pub evaluate_interval_hours: u64,
     #[serde(default = "default_min_score")]
     pub min_score: f64,
 }
@@ -117,8 +113,6 @@ impl Default for WatchlistConfig {
             max_gemini_calls_per_day: default_max_gemini_calls(),
             candidate_count: default_candidate_count(),
             hunt_interval_minutes: default_hunt_interval(),
-            collect_interval_minutes: default_collect_interval(),
-            evaluate_interval_hours: default_evaluate_interval(),
             min_score: default_min_score(),
         }
     }
@@ -128,8 +122,6 @@ fn default_gemini_model() -> String { "gemini-2.5-flash".to_string() }
 fn default_max_gemini_calls() -> usize { 250 }
 fn default_candidate_count() -> usize { 30 }
 fn default_hunt_interval() -> u64 { 30 }
-fn default_collect_interval() -> u64 { 2 }
-fn default_evaluate_interval() -> u64 { 2 }
 fn default_min_score() -> f64 { 60.0 }
 
 // --- 디스크 포맷: BootConfig ---

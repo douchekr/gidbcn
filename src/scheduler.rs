@@ -24,16 +24,7 @@ pub async fn run_scheduler(
     let hunt_min = storage::with_config(|c| c.watchlist.hunt_interval_minutes);
     let mut hunt_tick = interval(Duration::from_secs(hunt_min * 60));
 
-    let collect_min = storage::with_config(|c| c.watchlist.collect_interval_minutes);
-    let mut collect_tick = interval(Duration::from_secs(collect_min * 60));
-
-    let eval_hours = storage::with_config(|c| c.watchlist.evaluate_interval_hours);
-    let mut evaluate_tick = interval(Duration::from_secs(eval_hours * 3600));
-
-    tracing::info!(
-        "Scheduler started: signal {}min, hunt {}min, collect {}min, evaluate {}h",
-        interval_min, hunt_min, collect_min, eval_hours,
-    );
+    tracing::info!("Scheduler started: signal {}min, hunt {}min", interval_min, hunt_min);
 
     loop {
         tokio::select! {
@@ -51,33 +42,12 @@ pub async fn run_scheduler(
                 }
             }
             _ = hunt_tick.tick() => {
-                if !discovery_enabled.load(Ordering::SeqCst) {
-                    continue;
+                if discovery_enabled.load(Ordering::SeqCst) && prompts_configured() {
+                    run_hunt_cycle(&api, &bot).await;
                 }
-                if !prompts_configured() {
-                    continue;
-                }
-                run_hunt(&bot).await;
-            }
-            _ = collect_tick.tick() => {
-                if !discovery_enabled.load(Ordering::SeqCst) {
-                    continue;
-                }
-                // 라운드로빈: pending 1개 수집
-                pipeline::collect_one(&api).await;
-            }
-            _ = evaluate_tick.tick() => {
-                if !discovery_enabled.load(Ordering::SeqCst) {
-                    continue;
-                }
-                if !prompts_configured() {
-                    continue;
-                }
-                run_evaluate(&bot).await;
             }
             _ = discovery_trigger.notified() => {
-                // /w run 즉시 실행: 사냥 1회
-                run_hunt(&bot).await;
+                run_hunt_cycle(&api, &bot).await;
             }
         }
     }
@@ -88,39 +58,13 @@ fn prompts_configured() -> bool {
         && wdb::get_prompt(PromptType::Judge).ok().flatten().is_some()
 }
 
-async fn run_hunt(bot: &Bot) {
-    tracing::info!("Running hunt...");
+async fn run_hunt_cycle(api: &ApiHandle, bot: &Bot) {
+    tracing::info!("Running hunt cycle...");
     let client = reqwest::Client::new();
     let owner_id = storage::with_config(|c| c.telegram.owner_chat_id);
 
-    match pipeline::run_hunt(&client).await {
+    match pipeline::run_cycle(api, &client).await {
         Ok(report) => {
-            let msg = format!("🎯 사냥완료 ({}개 후보)", report.hunted);
-            tracing::info!("{msg}");
-            if owner_id != 0 {
-                let _ = bot.send_message(ChatId(owner_id), &msg).await;
-            }
-        }
-        Err(e) => {
-            tracing::error!("Hunt failed: {e:#}");
-            if owner_id != 0 {
-                let _ = bot.send_message(ChatId(owner_id), format!("❌ 사냥 실패: {e:#}")).await;
-            }
-        }
-    }
-}
-
-async fn run_evaluate(bot: &Bot) {
-    let client = reqwest::Client::new();
-    let owner_id = storage::with_config(|c| c.telegram.owner_chat_id);
-
-    match pipeline::run_evaluate(&client).await {
-        Ok(report) => {
-            let total = report.survived + report.culled;
-            if total == 0 {
-                tracing::debug!("No collected candidates to evaluate");
-                return;
-            }
             let msg = report.summary();
             tracing::info!("{msg}");
             if owner_id != 0 {
@@ -128,9 +72,9 @@ async fn run_evaluate(bot: &Bot) {
             }
         }
         Err(e) => {
-            tracing::error!("Evaluate failed: {e:#}");
+            tracing::error!("Hunt cycle failed: {e:#}");
             if owner_id != 0 {
-                let _ = bot.send_message(ChatId(owner_id), format!("❌ 평가 실패: {e:#}")).await;
+                let _ = bot.send_message(ChatId(owner_id), format!("❌ 사냥 실패: {e:#}")).await;
             }
         }
     }

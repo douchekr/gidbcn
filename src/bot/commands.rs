@@ -1300,14 +1300,9 @@ async fn cmd_watchlist(
 
             discovery_enabled.store(true, Ordering::SeqCst);
             discovery_trigger.notify_one(); // 즉시 사냥 1회
-            let (hunt, collect, eval) = storage::with_config(|c| (
-                c.watchlist.hunt_interval_minutes,
-                c.watchlist.collect_interval_minutes,
-                c.watchlist.evaluate_interval_hours,
-            ));
+            let hunt_min = storage::with_config(|c| c.watchlist.hunt_interval_minutes);
             format!(
-                "🔍 사냥 시작! (즉시 1회 + 자동)\n\
-                 사냥 {hunt}분 / 수집 {collect}분 / 평가 {eval}시간\n\
+                "🔍 사냥 시작! (즉시 1회 + {hunt_min}분 주기)\n\
                  /w stop 으로 중지"
             )
         }

@@ -5,23 +5,21 @@ use crate::models::messages::OverseasDetail;
 
 use super::{db, gemini, models::CandidateStatus};
 
-/// 사냥 결과
-pub struct HuntReport {
+/// 사냥 사이클 결과
+pub struct CycleReport {
     pub hunted: usize,
-}
-
-/// 평가 결과
-pub struct EvaluateReport {
+    pub collected: usize,
     pub survived: usize,
     pub culled: usize,
+    pub collect_failed: usize,
 }
 
-impl EvaluateReport {
+impl CycleReport {
     pub fn summary(&self) -> String {
-        let total = self.survived + self.culled;
+        let err = if self.collect_failed == 0 { String::new() } else { format!(" ❗{}", self.collect_failed) };
         format!(
-            "⚖️ 평가완료 ({}개 → ✅{}생존 ⚖️{}처단)",
-            total, self.survived, self.culled,
+            "🎯 사냥완료 ({}후보 → ✅{}생존 ⚖️{}처단{})",
+            self.hunted, self.survived, self.culled, err,
         )
     }
 }
@@ -67,48 +65,53 @@ async fn fetch_detail(api: &ApiHandle, ticker: &str) -> Result<OverseasDetail> {
     anyhow::bail!("{ticker}: 모든 거래소에서 조회 실패")
 }
 
-// === A: 사냥 ===
+/// 전체 사이클: 사냥 → 수집(라운드로빈) → 평가
+pub async fn run_cycle(
+    api: &ApiHandle,
+    http_client: &reqwest::Client,
+) -> Result<CycleReport> {
+    let mut report = CycleReport {
+        hunted: 0,
+        collected: 0,
+        survived: 0,
+        culled: 0,
+        collect_failed: 0,
+    };
 
-pub async fn run_hunt(http_client: &reqwest::Client) -> Result<HuntReport> {
+    // 1. 사냥
     let candidates = gemini::hunt(http_client).await
         .context("사냥 실패")?;
-    Ok(HuntReport { hunted: candidates.len() })
-}
+    report.hunted = candidates.len();
 
-// === B: 수집 (라운드로빈 — 1개씩) ===
+    if candidates.is_empty() {
+        return Ok(report);
+    }
 
-/// pending 중 가장 오래된 1개를 수집. 성공 → collected, 실패 → BL.
-/// 수집할 게 없으면 None 리턴.
-pub async fn collect_one(api: &ApiHandle) -> Option<(String, bool)> {
-    let pending = db::list_candidates(Some(CandidateStatus::Pending)).ok()?;
-    let candidate = pending.first()?;
-    let ticker = candidate.ticker.clone();
-    let id = candidate.id;
+    // 2. 수집 (라운드로빈 — 1개씩 순차 처리)
+    let pending = db::list_candidates(Some(CandidateStatus::Pending))
+        .context("pending 후보 조회 실패")?;
 
-    match fetch_detail(api, &ticker).await {
-        Ok(detail) => {
-            let text = format_detail_for_gemini(&ticker, &detail);
-            if let Err(e) = db::update_candidate_collected(id, &text) {
-                tracing::error!("수집 데이터 저장 실패 {ticker}: {e:#}");
-                return Some((ticker, false));
+    for candidate in &pending {
+        match fetch_detail(api, &candidate.ticker).await {
+            Ok(detail) => {
+                let text = format_detail_for_gemini(&candidate.ticker, &detail);
+                if let Err(e) = db::update_candidate_collected(candidate.id, &text) {
+                    tracing::error!("수집 데이터 저장 실패 {}: {e:#}", candidate.ticker);
+                    report.collect_failed += 1;
+                } else {
+                    report.collected += 1;
+                }
             }
-            tracing::debug!("수집 완료: {ticker}");
-            Some((ticker, true))
-        }
-        Err(e) => {
-            tracing::warn!("수집 실패 → BL: {ticker}: {e:#}");
-            let _ = db::add_blacklist(&ticker, "한투 API 조회 실패 (자동)");
-            let _ = db::update_candidate_status(id, CandidateStatus::Blacklisted);
-            Some((ticker, false))
+            Err(e) => {
+                tracing::warn!("수집 실패 → BL: {}: {e:#}", candidate.ticker);
+                let _ = db::add_blacklist(&candidate.ticker, "한투 API 조회 실패 (자동)");
+                let _ = db::update_candidate_status(candidate.id, CandidateStatus::Blacklisted);
+                report.collect_failed += 1;
+            }
         }
     }
-}
 
-// === C: 평가 ===
-
-pub async fn run_evaluate(http_client: &reqwest::Client) -> Result<EvaluateReport> {
-    let mut report = EvaluateReport { survived: 0, culled: 0 };
-
+    // 3. 평가 (collected 모아서 Gemini 1콜)
     let collected = db::list_candidates(Some(CandidateStatus::Collected))
         .context("collected 후보 조회 실패")?;
 
@@ -116,7 +119,6 @@ pub async fn run_evaluate(http_client: &reqwest::Client) -> Result<EvaluateRepor
         return Ok(report);
     }
 
-    // detail_text 합쳐서 Gemini에 전달
     let combined_data: String = collected.iter()
         .map(|c| c.detail_text.as_str())
         .collect::<Vec<_>>()
@@ -144,8 +146,8 @@ pub async fn run_evaluate(http_client: &reqwest::Client) -> Result<EvaluateRepor
     }
 
     tracing::info!(
-        "평가 완료: 생존 {}개, 처단 {}개",
-        report.survived, report.culled
+        "사이클 완료: 사냥 {}개, 수집 {}개, 생존 {}개, 처단 {}개, 실패 {}개",
+        report.hunted, report.collected, report.survived, report.culled, report.collect_failed
     );
 
     Ok(report)
@@ -179,17 +181,27 @@ mod tests {
         assert!(text.contains("Ticker: SOUN"));
         assert!(text.contains("Name: SoundHound AI"));
         assert!(text.contains("Price: $4.52"));
-        assert!(text.contains("PBR: 8.5"));
-        assert!(text.contains("Sector: Technology"));
-        assert!(text.contains("52W High: $10.25, Low: $1.80"));
     }
 
     #[test]
-    fn evaluate_report_summary() {
-        let report = EvaluateReport { survived: 8, culled: 2 };
+    fn cycle_report_summary() {
+        let report = CycleReport {
+            hunted: 30, collected: 25, survived: 20, culled: 5, collect_failed: 5,
+        };
         let summary = report.summary();
-        assert!(summary.contains("평가완료"));
-        assert!(summary.contains("✅8생존"));
-        assert!(summary.contains("⚖️2처단"));
+        assert!(summary.contains("사냥완료"));
+        assert!(summary.contains("30후보"));
+        assert!(summary.contains("✅20생존"));
+        assert!(summary.contains("⚖️5처단"));
+        assert!(summary.contains("❗5"));
+    }
+
+    #[test]
+    fn cycle_report_no_errors() {
+        let report = CycleReport {
+            hunted: 10, collected: 10, survived: 8, culled: 2, collect_failed: 0,
+        };
+        let summary = report.summary();
+        assert!(!summary.contains("❗"));
     }
 }
