@@ -9,16 +9,18 @@ use super::{db, gemini, models::CandidateStatus};
 pub struct CycleReport {
     pub hunted: usize,
     pub detailed: usize,
-    pub judged: usize,
+    pub survived: usize,
+    pub culled: usize,
     pub errors: Vec<String>,
 }
 
 impl CycleReport {
     pub fn summary(&self) -> String {
+        let evaluated = self.survived + self.culled;
         let mut lines = vec![
             format!("🎯 사냥: {}개 후보", self.hunted),
             format!("📊 데이터 수집: {}개", self.detailed),
-            format!("⚖️ 처단: {}개 평가", self.judged),
+            format!("✅ 생존: {}개 / ⚖️ 처단: {}개 ({}개 평가)", self.survived, self.culled, evaluated),
         ];
         if !self.errors.is_empty() {
             lines.push(format!("⚠️ 오류: {}건", self.errors.len()));
@@ -85,7 +87,8 @@ pub async fn run_discovery_cycle(
     let mut report = CycleReport {
         hunted: 0,
         detailed: 0,
-        judged: 0,
+        survived: 0,
+        culled: 0,
         errors: Vec::new(),
     };
 
@@ -149,20 +152,20 @@ pub async fn run_discovery_cycle(
         if let Some(candidate) = pending.iter().find(|c| c.ticker == ticker) {
             if let Err(e) = db::update_candidate_judge(candidate.id, jr.score, &jr.verdict) {
                 report.errors.push(format!("{ticker} DB 업데이트 실패: {e}"));
+            } else if jr.score < min_score {
+                let reason = format!("처단: {:.0}점 < 기준 {:.0}점", jr.score, min_score);
+                let _ = db::add_blacklist(&ticker, &reason);
+                let _ = db::update_candidate_status(candidate.id, CandidateStatus::Blacklisted);
+                report.culled += 1;
             } else {
-                report.judged += 1;
-                if jr.score < min_score {
-                    let reason = format!("처단: {:.0}점 < 기준 {:.0}점", jr.score, min_score);
-                    let _ = db::add_blacklist(&ticker, &reason);
-                    let _ = db::update_candidate_status(candidate.id, CandidateStatus::Blacklisted);
-                }
+                report.survived += 1;
             }
         }
     }
 
     tracing::info!(
-        "디스커버리 사이클 완료: 사냥 {}개, 데이터 {}개, 처단 {}개",
-        report.hunted, report.detailed, report.judged
+        "디스커버리 사이클 완료: 사냥 {}개, 데이터 {}개, 생존 {}개, 처단 {}개",
+        report.hunted, report.detailed, report.survived, report.culled
     );
 
     Ok(report)
@@ -206,15 +209,17 @@ mod tests {
         let report = CycleReport {
             hunted: 30,
             detailed: 28,
-            judged: 25,
+            survived: 20,
+            culled: 5,
             errors: vec!["XYZ: 조회 실패".to_string()],
         };
         let summary = report.summary();
         assert!(summary.contains("사냥: 30개"));
         assert!(summary.contains("데이터 수집: 28개"));
-        assert!(summary.contains("처단: 25개"));
+        assert!(summary.contains("생존: 20개"));
+        assert!(summary.contains("처단: 5개"));
+        assert!(summary.contains("25개 평가"));
         assert!(summary.contains("오류: 1건"));
-        assert!(summary.contains("XYZ: 조회 실패"));
     }
 
     #[test]
@@ -222,10 +227,13 @@ mod tests {
         let report = CycleReport {
             hunted: 10,
             detailed: 10,
-            judged: 10,
+            survived: 8,
+            culled: 2,
             errors: Vec::new(),
         };
         let summary = report.summary();
         assert!(!summary.contains("오류"));
+        assert!(summary.contains("생존: 8개"));
+        assert!(summary.contains("처단: 2개"));
     }
 }
