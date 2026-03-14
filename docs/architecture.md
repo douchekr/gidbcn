@@ -11,28 +11,29 @@
   → handle_command() (commands.rs)
        │
        ├─ [시세 조회 없는 명령: /port add, /port remove, /port edit, /signal*]
-       │    storage::load_*()          // std::fs로 JSON 읽기
+       │    storage::load_*()          // SQLite SELECT (watchlist.db)
        │    데이터 변경
-       │    storage::save_*()          // std::fs로 JSON 쓰기
+       │    storage::save_*()          // SQLite DELETE+INSERT (트랜잭션)
        │    응답 문자열 반환
        │
        └─ [현재가 필요한 명령: /port list, /port info, /port summary]
-            storage::load_portfolio()
+            storage::load_portfolio()  // SQLite SELECT
             ┌─ CART 종목: cached_price 직접 사용 (API 호출 스킵)
             └─ 기타 종목: api.get_price_for_market() ──► API Actor (mpsc)
                                                           reqwest → 한투 API
                                                       ◄── PriceData (oneshot)
             formatter로 메시지 생성
-            [캐시 갱신] storage::save_portfolio()  // name, cached_price, cached_at
+            [캐시 갱신] storage::save_portfolio()  // SQLite 저장
             응답 문자열 반환
   → bot.send_message()
 ```
 
-**JSON 파일 경로**: `/opt/kkuepark/gidbcn/`
-- `portfolio.json` — 전체 사용자 포트폴리오 (user_id가 최상위 키)
-- `signals.json` — 전체 사용자 시그널 (user_id가 최상위 키)
+**데이터 저장**: `/opt/kkuepark/gidbcn/watchlist.db` (SQLite, WAL 모드)
+- `holdings` 테이블 — 전체 사용자 포트폴리오 (user_id 컬럼)
+- `signals` 테이블 — 전체 사용자 시그널 (user_id 컬럼)
+- `candidates`, `blacklist`, `prompts` 등 워치리스트 테이블도 동일 DB
 
-**동기 I/O**: `std::fs` 직접 사용 (수 KB 파일, current_thread에서 블로킹 무시 가능)
+**동기 I/O**: rusqlite 동기 호출 (current_thread에서 블로킹 무시 가능, `thread_local! RefCell<Connection>`)
 
 ---
 
@@ -325,13 +326,13 @@ Mutex 없이 채널만으로 동시성 확보.
 스케줄러 (5분 interval)
   → is_market_hours()? (KRX 09:00~15:30 / US 22:30~05:00 KST)
   → check_all_signals()
-       1. portfolio.json + signals.json 로드
+       1. holdings + signals 테이블 로드 (SQLite)
        2. 활성(active=true) 시그널만 순회
        3. 포트폴리오에서 종목의 Market 파악 (없으면 스킵)
        4. market.is_open_now()? 장외면 스킵
        5. API Actor에 현재가 요청 (mpsc/oneshot)
        6. cached_price/cached_at 갱신
-       7. 조건 평가 → 발동 시 텔레그램 전송 + active=false 저장
+       7. 조건 평가 → 발동 시 텔레그램 전송 + active=false SQLite 저장
 ```
 
 ### 조건별 판정
@@ -345,7 +346,7 @@ Mutex 없이 채널만으로 동시성 확보.
 
 ### 발동 후 처리
 
-- **1회성**: 텔레그램 전송 성공 시에만 `active: false` → signals.json 저장
+- **1회성**: 텔레그램 전송 성공 시에만 `active: false` → SQLite 저장
 - 전송 실패 시 `active` 유지 → 다음 주기에 재시도
 - 한 주기 내 여러 시그널 발동 가능 → 변경분 한 번에 저장
 
@@ -390,7 +391,7 @@ Mutex 없이 채널만으로 동시성 확보.
 ### 데이터 저장
 - **SQLite** (`/opt/kkuepark/gidbcn/watchlist.db`, WAL 모드)
 - `thread_local! RefCell<Option<Connection>>` — LocalSet 덕에 `!Send` OK
-- 테이블: candidates, blacklist, prompts, prompt_history, api_usage
+- 테이블: candidates, blacklist, prompts, prompt_history, api_usage, holdings, signals
 
 ### Gemini API
 - 모델: gemini-2.5-flash (무료 티어)

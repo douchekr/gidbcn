@@ -31,12 +31,13 @@
 │  │  • 명령어 처리          │         └─────────────┘ │
 │  │  • 시그널 엔진          │                         │
 │  │  • 스케줄러 (interval)  │  직접 호출 (sync)       │
-│  │  • JSON I/O 직접 처리   │◄──────► /opt/.../portfolio.json │
+│  │  • SQLite I/O (holdings/ │◄──────► /opt/.../watchlist.db  │
+│  │    signals 테이블)       │                                │
 │  └───────────────────────┘                          │
 └─────────────────────────────────────────────────────┘
 ```
 
-- **Bot Task**: teloxide 디스패처 + 명령어 처리 + 시그널 엔진 + 스케줄러 + JSON I/O
+- **Bot Task**: teloxide 디스패처 + 명령어 처리 + 시그널 엔진 + 스케줄러 + SQLite I/O
 - **API Actor**: reqwest::Client, access_token, rate limiter 독점 소유. mpsc로 요청 수신, oneshot으로 응답 반환
 
 ### Actor 간 통신
@@ -108,7 +109,7 @@ gidbcn/
     │   ├── mod.rs
     │   ├── engine.rs      ← 시그널 조건 평가 엔진
     │   └── price.rs       ← price_above/below, profit_above/below
-    ├── storage.rs         ← portfolio/signals JSON CRUD (동기)
+    ├── storage.rs         ← portfolio/signals SQLite CRUD (watchlist/db.rs 위임)
     ├── scheduler.rs       ← tokio::time::interval 기반
     └── models/
         ├── mod.rs
@@ -120,8 +121,8 @@ gidbcn/
 
 **데이터 파일 경로** (레포 외부): `/opt/kkuepark/gidbcn/`
 - `config.json` — API 키, 토큰, 허용 사용자 목록 (gitignore)
-- `portfolio.json` — 전체 사용자 포트폴리오 (user_id 키 통합)
-- `signals.json` — 전체 사용자 시그널 (user_id 키 통합)
+- `watchlist.db` — SQLite (WAL 모드): 포트폴리오(holdings), 시그널(signals), 워치리스트(candidates, blacklist 등)
+- `portfolio.json` / `signals.json` — 레거시. 최초 기동 시 SQLite로 자동 마이그레이션 (삭제 안 함, 백업용 보존)
 
 ---
 
@@ -274,54 +275,47 @@ custtype: P
 - **환율 없음**: `usd_krw`는 config에 저장하지 않음. actor 시작 시 기본값 1350.0, 이후 해외주식 조회 시 t_rate로 자동 갱신.
 - **log 섹션 자동 마이그레이션**: 기존 config.json에 `log` 키가 없으면 시작 시 defaults 포함해서 자동 저장.
 
-### portfolio.json
-```json
-{
-  "42621862": {
-    "holdings": [
-      {
-        "market": "KRX",
-        "symbol": "005930",
-        "name": "삼성전자",
-        "quantity": 10,
-        "avg_price": 70000.0,
-        "added_at": "2026-02-26T10:00:00+09:00",
-        "cached_price": 72500.0,
-        "cached_at": "2026-02-26T14:30:00+09:00"
-      }
-    ]
-  }
-}
+### holdings 테이블 (SQLite, watchlist.db)
+```sql
+CREATE TABLE holdings (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      INTEGER NOT NULL,
+    market       TEXT NOT NULL,          -- KRX, NAS, NYS, AMS, BOND, CART
+    symbol       TEXT NOT NULL,
+    name         TEXT NOT NULL DEFAULT '',
+    account      TEXT NOT NULL DEFAULT '',
+    quantity     REAL NOT NULL,
+    avg_price    REAL NOT NULL,
+    added_at     TEXT NOT NULL,          -- RFC3339
+    cached_price REAL,
+    cached_at    TEXT,
+    UNIQUE(user_id, symbol, account)
+);
 ```
-- 최상위 키: Telegram user_id (문자열)
-- market: `KRX` | `NAS` | `NYS` | `AMS` | `BOND` | `CART`
 - `name`: 시세 조회 시 API에서 자동 캐싱. `/port add` 시 직접 입력 가능.
 - `cached_price` / `cached_at`: 마지막 성공 조회 가격. 조회 실패 시 폴백용. `⏱` 마커로 표시.
 - **BOND 전용**: `quantity` = 액면가 1,000원 단위, `avg_price`/`cached_price` = 10,000원 액면 기준 가격
   - 평가금액 = `price × quantity × 0.1` (예: qty=50000, price=7485 → 37,425,000원)
 
-### signals.json
-```json
-{
-  "42621862": {
-    "signals": [
-      {
-        "id": "fc8f512e-ca6b-4a86-8ed4-e442863919db",
-        "symbol": "005930",
-        "condition": {
-          "type": "price_above",
-          "params": { "target": 80000.0 }
-        },
-        "active": true,
-        "created_at": "2026-02-26T10:30:00+09:00"
-      }
-    ]
-  }
-}
+### signals 테이블 (SQLite, watchlist.db)
+```sql
+CREATE TABLE signals (
+    id          TEXT PRIMARY KEY,       -- UUID v4
+    user_id     INTEGER NOT NULL,
+    symbol      TEXT NOT NULL,
+    account     TEXT NOT NULL DEFAULT '',
+    cond_type   TEXT NOT NULL,          -- price_above, price_below, profit_above, profit_below
+    cond_value  REAL NOT NULL,          -- target 또는 percentage
+    active      INTEGER NOT NULL DEFAULT 1,
+    created_at  TEXT NOT NULL           -- RFC3339
+);
 ```
-- 최상위 키: Telegram user_id (문자열)
 - `id`: UUID v4 (내부 식별용, 사용자에게 노출 안 됨)
 - 사용자에게는 `/signal list`의 순서 번호로 표시 및 삭제
+
+### JSON → SQLite 자동 마이그레이션
+- 최초 기동 시 holdings/signals 테이블이 비어있고 `portfolio.json`/`signals.json`이 존재하면 자동 임포트
+- JSON 파일은 삭제하지 않음 (백업 보존)
 
 **condition types:**
 | type | params | 설명 |

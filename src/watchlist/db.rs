@@ -1,9 +1,13 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
+use chrono::{DateTime, FixedOffset};
 use rusqlite::{params, Connection};
 
 use super::models::{BlacklistEntry, Candidate, CandidateStatus, PromptRecord, PromptType};
+use crate::models::portfolio::{Holding, Market, PortfolioStore};
+use crate::models::signal::{Condition, Signal, SignalStore};
 
 const DB_PATH: &str = "/opt/kkuepark/gidbcn/watchlist.db";
 
@@ -67,11 +71,45 @@ pub fn init_db() -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_candidates_status ON candidates(status);
         CREATE INDEX IF NOT EXISTS idx_candidates_ticker ON candidates(ticker);
         CREATE INDEX IF NOT EXISTS idx_blacklist_ticker ON blacklist(ticker);
-        CREATE INDEX IF NOT EXISTS idx_api_usage_date ON api_usage(called_at);",
+        CREATE INDEX IF NOT EXISTS idx_api_usage_date ON api_usage(called_at);
+
+        CREATE TABLE IF NOT EXISTS holdings (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id      INTEGER NOT NULL,
+            market       TEXT NOT NULL,
+            symbol       TEXT NOT NULL,
+            name         TEXT NOT NULL DEFAULT '',
+            account      TEXT NOT NULL DEFAULT '',
+            quantity     REAL NOT NULL,
+            avg_price    REAL NOT NULL,
+            added_at     TEXT NOT NULL,
+            cached_price REAL,
+            cached_at    TEXT,
+            UNIQUE(user_id, symbol, account)
+        );
+        CREATE INDEX IF NOT EXISTS idx_holdings_user ON holdings(user_id);
+
+        CREATE TABLE IF NOT EXISTS signals (
+            id          TEXT PRIMARY KEY,
+            user_id     INTEGER NOT NULL,
+            symbol      TEXT NOT NULL,
+            account     TEXT NOT NULL DEFAULT '',
+            cond_type   TEXT NOT NULL,
+            cond_value  REAL NOT NULL,
+            active      INTEGER NOT NULL DEFAULT 1,
+            created_at  TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_signals_user ON signals(user_id);
+        CREATE INDEX IF NOT EXISTS idx_signals_active ON signals(active);",
     )?;
 
     DB_CONN.with(|c| *c.borrow_mut() = Some(conn));
     tracing::info!("watchlist DB initialized: {DB_PATH}");
+
+    // JSON → SQLite 자동 마이그레이션
+    migrate_json_portfolio()?;
+    migrate_json_signals()?;
+
     Ok(())
 }
 
@@ -324,6 +362,245 @@ pub fn gemini_calls_today() -> Result<usize> {
     })
 }
 
+// --- Holdings (portfolio) ---
+
+pub fn load_holdings(user_id: i64) -> Result<PortfolioStore> {
+    with_db(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT market, symbol, name, account, quantity, avg_price, added_at, cached_price, cached_at
+             FROM holdings WHERE user_id = ?1 ORDER BY id",
+        )?;
+        let rows = stmt.query_map(params![user_id], |row| {
+            let market_str: String = row.get(0)?;
+            let added_at_str: String = row.get(6)?;
+            let cached_at_str: Option<String> = row.get(8)?;
+            Ok((market_str, row.get(1)?, row.get(2)?, row.get(3)?,
+                row.get(4)?, row.get(5)?, added_at_str,
+                row.get(7)?, cached_at_str))
+        })?;
+
+        let mut holdings = Vec::new();
+        for r in rows {
+            let (market_str, symbol, name, account, quantity, avg_price,
+                 added_at_str, cached_price, cached_at_str): (String, String, String, String, f64, f64, String, Option<f64>, Option<String>) = r?;
+
+            let market = Market::from_str(&market_str)
+                .unwrap_or(Market::KRX);
+            let added_at = DateTime::parse_from_rfc3339(&added_at_str)
+                .unwrap_or_else(|_| chrono::Utc::now().with_timezone(&kst_offset()));
+            let cached_at = cached_at_str.and_then(|s| DateTime::parse_from_rfc3339(&s).ok());
+
+            holdings.push(Holding {
+                market, symbol, name, account, quantity, avg_price,
+                added_at, cached_price, cached_at,
+            });
+        }
+        Ok(PortfolioStore { holdings })
+    })
+}
+
+pub fn save_holdings(user_id: i64, store: &PortfolioStore) -> Result<()> {
+    with_db(|conn| {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM holdings WHERE user_id = ?1", params![user_id])?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO holdings (user_id, market, symbol, name, account, quantity, avg_price, added_at, cached_price, cached_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            )?;
+            for h in &store.holdings {
+                let cached_at_str = h.cached_at.map(|dt| dt.to_rfc3339());
+                stmt.execute(params![
+                    user_id,
+                    h.market.to_string(),
+                    h.symbol,
+                    h.name,
+                    h.account,
+                    h.quantity,
+                    h.avg_price,
+                    h.added_at.to_rfc3339(),
+                    h.cached_price,
+                    cached_at_str,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    })
+}
+
+pub fn list_holding_user_ids() -> Result<Vec<i64>> {
+    with_db(|conn| {
+        let mut stmt = conn.prepare("SELECT DISTINCT user_id FROM holdings")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    })
+}
+
+// --- Signals ---
+
+fn condition_to_parts(cond: &Condition) -> (&'static str, f64) {
+    match cond {
+        Condition::PriceAbove { target } => ("price_above", *target),
+        Condition::PriceBelow { target } => ("price_below", *target),
+        Condition::ProfitAbove { percentage } => ("profit_above", *percentage),
+        Condition::ProfitBelow { percentage } => ("profit_below", *percentage),
+    }
+}
+
+fn parts_to_condition(cond_type: &str, cond_value: f64) -> Result<Condition> {
+    match cond_type {
+        "price_above" => Ok(Condition::PriceAbove { target: cond_value }),
+        "price_below" => Ok(Condition::PriceBelow { target: cond_value }),
+        "profit_above" => Ok(Condition::ProfitAbove { percentage: cond_value }),
+        "profit_below" => Ok(Condition::ProfitBelow { percentage: cond_value }),
+        other => bail!("unknown condition type: {other}"),
+    }
+}
+
+pub fn load_signals_db(user_id: i64) -> Result<SignalStore> {
+    with_db(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT id, symbol, account, cond_type, cond_value, active, created_at
+             FROM signals WHERE user_id = ?1 ORDER BY created_at",
+        )?;
+        let rows = stmt.query_map(params![user_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, f64>(4)?,
+                row.get::<_, bool>(5)?,
+                row.get::<_, String>(6)?,
+            ))
+        })?;
+
+        let mut signals = Vec::new();
+        for r in rows {
+            let (id, symbol, account, cond_type, cond_value, active, created_at_str) = r?;
+            let condition = parts_to_condition(&cond_type, cond_value)
+                .unwrap_or(Condition::PriceAbove { target: cond_value });
+            let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+                .unwrap_or_else(|_| chrono::Utc::now().with_timezone(&kst_offset()));
+            signals.push(Signal { id, symbol, account, condition, active, created_at });
+        }
+        Ok(SignalStore { signals })
+    })
+}
+
+pub fn save_signals_db(user_id: i64, store: &SignalStore) -> Result<()> {
+    with_db(|conn| {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM signals WHERE user_id = ?1", params![user_id])?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO signals (id, user_id, symbol, account, cond_type, cond_value, active, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            )?;
+            for s in &store.signals {
+                let (cond_type, cond_value) = condition_to_parts(&s.condition);
+                stmt.execute(params![
+                    s.id,
+                    user_id,
+                    s.symbol,
+                    s.account,
+                    cond_type,
+                    cond_value,
+                    s.active,
+                    s.created_at.to_rfc3339(),
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    })
+}
+
+// --- JSON → SQLite 마이그레이션 ---
+
+fn kst_offset() -> FixedOffset {
+    FixedOffset::east_opt(9 * 3600).unwrap()
+}
+
+const PORTFOLIO_JSON: &str = "/opt/kkuepark/gidbcn/portfolio.json";
+const SIGNALS_JSON: &str = "/opt/kkuepark/gidbcn/signals.json";
+
+fn migrate_json_portfolio() -> Result<()> {
+    // holdings 테이블이 비어있고 JSON 파일이 있으면 임포트
+    let count: i64 = with_db(|conn| {
+        Ok(conn.query_row("SELECT COUNT(*) FROM holdings", [], |row| row.get(0))?)
+    })?;
+    if count > 0 {
+        return Ok(());
+    }
+
+    let json_str = match std::fs::read_to_string(PORTFOLIO_JSON) {
+        Ok(s) => s,
+        Err(_) => return Ok(()), // 파일 없으면 스킵
+    };
+
+    let db: HashMap<String, PortfolioStore> = match serde_json::from_str(&json_str) {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!("portfolio.json 파싱 실패 (마이그레이션 스킵): {e}");
+            return Ok(());
+        }
+    };
+
+    let mut total = 0usize;
+    for (user_id_str, store) in &db {
+        let user_id: i64 = match user_id_str.parse() {
+            Ok(id) => id,
+            Err(_) => continue,
+        };
+        save_holdings(user_id, store)?;
+        total += store.holdings.len();
+    }
+
+    if total > 0 {
+        tracing::info!("portfolio.json → SQLite 마이그레이션 완료: {total}건 ({} 사용자)", db.len());
+    }
+    Ok(())
+}
+
+fn migrate_json_signals() -> Result<()> {
+    let count: i64 = with_db(|conn| {
+        Ok(conn.query_row("SELECT COUNT(*) FROM signals", [], |row| row.get(0))?)
+    })?;
+    if count > 0 {
+        return Ok(());
+    }
+
+    let json_str = match std::fs::read_to_string(SIGNALS_JSON) {
+        Ok(s) => s,
+        Err(_) => return Ok(()),
+    };
+
+    let db: HashMap<String, SignalStore> = match serde_json::from_str(&json_str) {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!("signals.json 파싱 실패 (마이그레이션 스킵): {e}");
+            return Ok(());
+        }
+    };
+
+    let mut total = 0usize;
+    for (user_id_str, store) in &db {
+        let user_id: i64 = match user_id_str.parse() {
+            Ok(id) => id,
+            Err(_) => continue,
+        };
+        save_signals_db(user_id, store)?;
+        total += store.signals.len();
+    }
+
+    if total > 0 {
+        tracing::info!("signals.json → SQLite 마이그레이션 완료: {total}건 ({} 사용자)", db.len());
+    }
+    Ok(())
+}
+
 // --- Helpers ---
 
 fn now_iso() -> String {
@@ -366,6 +643,21 @@ mod tests {
                 id INTEGER PRIMARY KEY AUTOINCREMENT, api_name TEXT NOT NULL,
                 called_at TEXT NOT NULL, endpoint TEXT NOT NULL DEFAULT '',
                 success INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE TABLE IF NOT EXISTS holdings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL, market TEXT NOT NULL,
+                symbol TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
+                account TEXT NOT NULL DEFAULT '', quantity REAL NOT NULL,
+                avg_price REAL NOT NULL, added_at TEXT NOT NULL,
+                cached_price REAL, cached_at TEXT,
+                UNIQUE(user_id, symbol, account)
+            );
+            CREATE TABLE IF NOT EXISTS signals (
+                id TEXT PRIMARY KEY, user_id INTEGER NOT NULL,
+                symbol TEXT NOT NULL, account TEXT NOT NULL DEFAULT '',
+                cond_type TEXT NOT NULL, cond_value REAL NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL
             );",
         ).unwrap();
         DB_CONN.with(|c| *c.borrow_mut() = Some(conn));
@@ -416,5 +708,123 @@ mod tests {
         log_api_call("gemini", "generateContent", true).unwrap();
         log_api_call("gemini", "generateContent", true).unwrap();
         assert_eq!(gemini_calls_today().unwrap(), 2);
+    }
+
+    #[test]
+    fn holdings_crud() {
+        setup_test_db();
+        let kst = FixedOffset::east_opt(9 * 3600).unwrap();
+        let now = chrono::Utc::now().with_timezone(&kst);
+
+        // 빈 상태
+        let store = load_holdings(123).unwrap();
+        assert!(store.holdings.is_empty());
+
+        // 저장
+        let store = PortfolioStore {
+            holdings: vec![
+                Holding {
+                    market: Market::KRX, symbol: "005930".into(), name: "삼성전자".into(),
+                    account: String::new(), quantity: 10.0, avg_price: 70000.0,
+                    added_at: now, cached_price: Some(72000.0), cached_at: Some(now),
+                },
+                Holding {
+                    market: Market::NAS, symbol: "AAPL".into(), name: "Apple".into(),
+                    account: "IRP".into(), quantity: 5.0, avg_price: 180.5,
+                    added_at: now, cached_price: None, cached_at: None,
+                },
+            ],
+        };
+        save_holdings(123, &store).unwrap();
+
+        // 로드 + 검증
+        let loaded = load_holdings(123).unwrap();
+        assert_eq!(loaded.holdings.len(), 2);
+        assert_eq!(loaded.holdings[0].symbol, "005930");
+        assert_eq!(loaded.holdings[0].market, Market::KRX);
+        assert_eq!(loaded.holdings[0].cached_price, Some(72000.0));
+        assert_eq!(loaded.holdings[1].symbol, "AAPL");
+        assert_eq!(loaded.holdings[1].account, "IRP");
+
+        // 다른 유저는 비어있음
+        let other = load_holdings(456).unwrap();
+        assert!(other.holdings.is_empty());
+
+        // user_ids
+        let ids = list_holding_user_ids().unwrap();
+        assert_eq!(ids, vec![123]);
+
+        // 덮어쓰기 (삼성전자 삭제, 애플만 남김)
+        let updated = PortfolioStore {
+            holdings: vec![loaded.holdings[1].clone()],
+        };
+        save_holdings(123, &updated).unwrap();
+        let reloaded = load_holdings(123).unwrap();
+        assert_eq!(reloaded.holdings.len(), 1);
+        assert_eq!(reloaded.holdings[0].symbol, "AAPL");
+    }
+
+    #[test]
+    fn signals_crud() {
+        setup_test_db();
+        let kst = FixedOffset::east_opt(9 * 3600).unwrap();
+        let now = chrono::Utc::now().with_timezone(&kst);
+
+        // 빈 상태
+        let store = load_signals_db(123).unwrap();
+        assert!(store.signals.is_empty());
+
+        // 저장
+        let store = SignalStore {
+            signals: vec![
+                Signal {
+                    id: "sig-1".into(), symbol: "005930".into(), account: String::new(),
+                    condition: Condition::PriceAbove { target: 80000.0 },
+                    active: true, created_at: now,
+                },
+                Signal {
+                    id: "sig-2".into(), symbol: "AAPL".into(), account: "IRP".into(),
+                    condition: Condition::ProfitBelow { percentage: -5.0 },
+                    active: false, created_at: now,
+                },
+            ],
+        };
+        save_signals_db(123, &store).unwrap();
+
+        // 로드 + 검증
+        let loaded = load_signals_db(123).unwrap();
+        assert_eq!(loaded.signals.len(), 2);
+        assert_eq!(loaded.signals[0].id, "sig-1");
+        assert!(loaded.signals[0].active);
+        match &loaded.signals[0].condition {
+            Condition::PriceAbove { target } => assert_eq!(*target, 80000.0),
+            _ => panic!("wrong condition variant"),
+        }
+        assert_eq!(loaded.signals[1].id, "sig-2");
+        assert!(!loaded.signals[1].active);
+        assert_eq!(loaded.signals[1].account, "IRP");
+        match &loaded.signals[1].condition {
+            Condition::ProfitBelow { percentage } => assert_eq!(*percentage, -5.0),
+            _ => panic!("wrong condition variant"),
+        }
+    }
+
+    #[test]
+    fn condition_roundtrip() {
+        let cases = vec![
+            (Condition::PriceAbove { target: 100.0 }, "price_above", 100.0),
+            (Condition::PriceBelow { target: 50.0 }, "price_below", 50.0),
+            (Condition::ProfitAbove { percentage: 10.0 }, "profit_above", 10.0),
+            (Condition::ProfitBelow { percentage: -5.0 }, "profit_below", -5.0),
+        ];
+        for (cond, expected_type, expected_value) in cases {
+            let (ct, cv) = condition_to_parts(&cond);
+            assert_eq!(ct, expected_type);
+            assert_eq!(cv, expected_value);
+            let restored = parts_to_condition(ct, cv).unwrap();
+            let (ct2, cv2) = condition_to_parts(&restored);
+            assert_eq!(ct2, expected_type);
+            assert_eq!(cv2, expected_value);
+        }
     }
 }
