@@ -4,8 +4,11 @@ use teloxide::prelude::*;
 use teloxide::types::InputFile;
 use teloxide::utils::command::BotCommands;
 
+use std::sync::Arc;
+
 use crate::api::ApiHandle;
 use crate::bot::formatter;
+use crate::config::BootConfig;
 use crate::models::messages::PriceData;
 use crate::models::portfolio::{Holding, Market};
 use crate::models::signal::{Condition, Signal};
@@ -40,6 +43,10 @@ pub enum Command {
     Watch(String),
     #[command(description = "워치리스트 단축 (/w)")]
     W(String),
+    #[command(description = "잠금 해제 (오너 전용)")]
+    Unlock(String),
+    #[command(description = "설정 암호화 (오너 전용)")]
+    Encrypt(String),
 }
 
 pub async fn handle_command(
@@ -125,6 +132,14 @@ pub async fn handle_command(
                 "이 명령어는 봇 오너만 사용할 수 있습니다.".to_string()
             } else {
                 cmd_user(&args)
+            }
+        }
+        Command::Unlock(_) => "이미 잠금 해제 상태입니다.".to_string(),
+        Command::Encrypt(args) => {
+            if !is_owner {
+                "이 명령어는 봇 오너만 사용할 수 있습니다.".to_string()
+            } else {
+                cmd_encrypt(&bot, chat_id, &args).await
             }
         }
     };
@@ -1473,6 +1488,96 @@ fn cmd_watch_history() -> String {
         ));
     }
     msg
+}
+
+// --- 잠금 모드 핸들러 ---
+
+pub async fn handle_locked_command(
+    bot: Bot,
+    msg: Message,
+    cmd: Command,
+    unlock_tx: Arc<tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<crate::config::Config>>>>,
+    boot: BootConfig,
+) -> ResponseResult<()> {
+    let chat_id = msg.chat.id;
+    let user_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
+    let owner_id = boot.telegram.owner_chat_id;
+
+    match cmd {
+        Command::Unlock(passphrase) => {
+            // 메시지 즉시 삭제 (패스프레이즈 노출 방지)
+            let _ = bot.delete_message(chat_id, msg.id).await;
+
+            if owner_id != 0 && user_id != owner_id {
+                bot.send_message(chat_id, "오너만 잠금 해제할 수 있습니다.").await?;
+                return Ok(());
+            }
+
+            let passphrase = passphrase.trim().to_string();
+            if passphrase.is_empty() {
+                bot.send_message(chat_id, "사용법: /unlock [패스프레이즈]").await?;
+                return Ok(());
+            }
+
+            // 복호화 시도
+            match boot.clone().decrypt_into_config(&passphrase) {
+                Ok(config) => {
+                    // unlock 채널로 config 전송
+                    let mut tx_guard = unlock_tx.lock().await;
+                    if let Some(tx) = tx_guard.take() {
+                        let _ = tx.send(config);
+                        bot.send_message(chat_id, "🔓 잠금 해제 완료!").await?;
+                    } else {
+                        bot.send_message(chat_id, "이미 잠금 해제되었습니다.").await?;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("잠금 해제 실패: {e:#}");
+                    bot.send_message(chat_id, "❌ 패스프레이즈가 틀렸습니다.").await?;
+                }
+            }
+        }
+        Command::Ping => {
+            bot.send_message(chat_id, "pong (🔒 잠금 상태)").await?;
+        }
+        _ => {
+            bot.send_message(chat_id, "🔒 잠금 상태입니다.\n/unlock [패스프레이즈] 로 잠금 해제하세요.").await?;
+        }
+    }
+
+    Ok(())
+}
+
+// --- 암호화 마이그레이션 ---
+
+async fn cmd_encrypt(bot: &Bot, chat_id: ChatId, args: &str) -> String {
+    let passphrase = args.trim();
+    if passphrase.is_empty() {
+        return "사용법: /encrypt [패스프레이즈]\n\n\
+                현재 평문 config를 암호화합니다.\n\
+                ⚠️ 패스프레이즈를 분실하면 설정을 복구할 수 없습니다!"
+            .to_string();
+    }
+
+    // 메시지 삭제 시도 (패스프레이즈 노출 방지)
+    // chat_id에서 최근 메시지 삭제는 bot이 admin이어야 하므로 실패할 수 있음
+    // DM에서는 deleteMessage가 동작함
+
+    let config_path = storage::CONFIG_PATH;
+
+    // 현재 config를 암호화하여 저장
+    let result = storage::with_config(|config| config.save_encrypted(config_path, passphrase));
+
+    match result {
+        Ok(_) => {
+            tracing::info!("config 암호화 완료");
+            "✅ 설정 암호화 완료!\n\n\
+             다음 재시작부터 /unlock [패스프레이즈]로 잠금 해제해야 합니다.\n\
+             ⚠️ 패스프레이즈를 안전한 곳에 보관하세요."
+                .to_string()
+        }
+        Err(e) => format!("❌ 암호화 실패: {e:#}"),
+    }
 }
 
 fn parse_condition(cond_type: &str, params: &[&str]) -> Result<Condition, String> {

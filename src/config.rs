@@ -98,6 +98,73 @@ fn default_gemini_model() -> String { "gemini-2.5-flash".to_string() }
 fn default_max_gemini_calls() -> usize { 250 }
 fn default_candidate_count() -> usize { 30 }
 
+/// 암호화 대상 민감 설정
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Secrets {
+    pub kis_api: KisApiConfig,
+    pub watchlist: WatchlistConfig,
+}
+
+/// 봇 기동용 최소 설정 (평문 부분만)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BootConfig {
+    pub telegram: TelegramConfig,
+    #[serde(default)]
+    pub scheduler: SchedulerConfig,
+    #[serde(default)]
+    pub log: LogConfig,
+    /// 암호화된 민감 설정 (base64). 없으면 평문 모드.
+    #[serde(default)]
+    pub encrypted_secrets: Option<String>,
+    // 평문 모드 하위 호환: 암호화 전에는 이 필드들이 존재
+    #[serde(default)]
+    pub kis_api: Option<KisApiConfig>,
+    #[serde(default)]
+    pub watchlist: Option<WatchlistConfig>,
+}
+
+impl BootConfig {
+    pub fn load(path: &str) -> Result<Self> {
+        let data = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read config: {path}"))?;
+        let config: BootConfig =
+            serde_json::from_str(&data).with_context(|| "Failed to parse config JSON")?;
+        Ok(config)
+    }
+
+    /// 암호화 모드인지 (encrypted_secrets 필드 존재)
+    pub fn is_encrypted(&self) -> bool {
+        self.encrypted_secrets.is_some()
+    }
+
+    /// 평문 모드에서 전체 Config 구성 (마이그레이션 전 호환)
+    pub fn into_plaintext_config(self) -> Result<Config> {
+        let kis_api = self.kis_api.context("kis_api 섹션 없음 (평문 모드)")?;
+        Ok(Config {
+            kis_api,
+            telegram: self.telegram,
+            scheduler: self.scheduler,
+            log: self.log,
+            watchlist: self.watchlist.unwrap_or_default(),
+        })
+    }
+
+    /// 암호화된 secrets를 복호화하여 전체 Config 구성
+    pub fn decrypt_into_config(self, passphrase: &str) -> Result<Config> {
+        let b64 = self.encrypted_secrets.context("encrypted_secrets 없음")?;
+        let json = crate::crypto::decrypt_from_base64(&b64, passphrase)?;
+        let secrets: Secrets = serde_json::from_str(&json)
+            .context("복호화된 secrets JSON 파싱 실패")?;
+        Ok(Config {
+            kis_api: secrets.kis_api,
+            telegram: self.telegram,
+            scheduler: self.scheduler,
+            log: self.log,
+            watchlist: secrets.watchlist,
+        })
+    }
+}
+
 impl Config {
     pub fn load(path: &str) -> Result<Self> {
         let data = std::fs::read_to_string(path)
@@ -111,6 +178,34 @@ impl Config {
         let data = serde_json::to_string_pretty(self)?;
         std::fs::write(path, data)
             .with_context(|| format!("Failed to write config: {path}"))?;
+        Ok(())
+    }
+
+    /// 민감 설정 추출
+    pub fn extract_secrets(&self) -> Secrets {
+        Secrets {
+            kis_api: self.kis_api.clone(),
+            watchlist: self.watchlist.clone(),
+        }
+    }
+
+    /// 암호화하여 BootConfig 형태로 저장
+    pub fn save_encrypted(&self, path: &str, passphrase: &str) -> Result<()> {
+        let secrets = self.extract_secrets();
+        let secrets_json = serde_json::to_string(&secrets)?;
+        let encrypted_b64 = crate::crypto::encrypt_to_base64(&secrets_json, passphrase)?;
+
+        // 평문 부분만 + encrypted_secrets
+        let boot = serde_json::json!({
+            "telegram": self.telegram,
+            "scheduler": self.scheduler,
+            "log": self.log,
+            "encrypted_secrets": encrypted_b64,
+        });
+
+        let data = serde_json::to_string_pretty(&boot)?;
+        std::fs::write(path, data)
+            .with_context(|| format!("Failed to write encrypted config: {path}"))?;
         Ok(())
     }
 }
