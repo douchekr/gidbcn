@@ -93,7 +93,7 @@ impl ActorContext {
                 tracing::info!("Token refreshed, expires at {}", token_info.expires_at);
                 self.config.token = Some(token_info.clone());
                 if let Err(e) = storage::update_config(|c| {
-                    c.kis_api.token = Some(token_info);
+                    c.secrets.set_token(&token_info.access_token, token_info.expires_at);
                 }) {
                     tracing::error!("Failed to save config after token refresh: {e}");
                 }
@@ -107,7 +107,7 @@ impl ActorContext {
 
 /// API Actor 메인 루프
 pub async fn run_api_actor(mut rx: mpsc::Receiver<ApiRequest>) {
-    let kis_config = storage::with_config(|c| c.kis_api.clone());
+    let kis_config = storage::with_config(|c| c.to_kis_api_config());
     let mut ctx = ActorContext::new(kis_config);
     let mut usd_krw: f64 = 1350.0;
 

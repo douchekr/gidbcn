@@ -8,11 +8,11 @@ use crate::storage;
 /// Gemini API raw 호출
 async fn call_gemini(client: &reqwest::Client, prompt: &str) -> Result<String> {
     let (api_key, model) = storage::with_config(|c| {
-        (c.watchlist.gemini_api_key.clone(), c.watchlist.gemini_model.clone())
+        (c.secrets.gemini_api_key.clone(), c.watchlist.gemini_model.clone())
     });
 
     if api_key.is_empty() {
-        bail!("watchlist.gemini_api_key가 설정되지 않았습니다");
+        bail!("secrets.gemini_api_key가 설정되지 않았습니다");
     }
 
     let url = format!(

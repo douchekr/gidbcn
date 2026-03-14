@@ -117,14 +117,14 @@ async fn async_main() {
         // 평문 모드 필수 설정 검증
         {
             let mut missing: Vec<&str> = Vec::new();
-            if config.kis_api.app_key.is_empty() || config.kis_api.app_key.starts_with("YOUR_") {
-                missing.push("kis_api.app_key");
+            if config.secrets.kis_app_key.is_empty() || config.secrets.kis_app_key.starts_with("YOUR_") {
+                missing.push("secrets.kis_app_key");
             }
-            if config.kis_api.app_secret.is_empty() || config.kis_api.app_secret.starts_with("YOUR_") {
-                missing.push("kis_api.app_secret");
+            if config.secrets.kis_app_secret.is_empty() || config.secrets.kis_app_secret.starts_with("YOUR_") {
+                missing.push("secrets.kis_app_secret");
             }
-            if config.kis_api.hts_id.is_empty() || config.kis_api.hts_id.starts_with("YOUR_") {
-                missing.push("kis_api.hts_id");
+            if config.secrets.kis_hts_id.is_empty() || config.secrets.kis_hts_id.starts_with("YOUR_") {
+                missing.push("secrets.kis_hts_id");
             }
             if !missing.is_empty() {
                 eprintln!("필수 설정이 누락되었습니다. {config_path} 를 수정하세요:");

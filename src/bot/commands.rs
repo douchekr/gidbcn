@@ -1579,8 +1579,8 @@ async fn cmd_encrypt(bot: &Bot, chat_id: ChatId, msg_id: teloxide::types::Messag
     // 현재 config를 암호화하여 저장
     let result = storage::with_config(|config| {
         tracing::info!(
-            "encrypt: watchlist.gemini_api_key={}, model={}",
-            if config.watchlist.gemini_api_key.is_empty() { "EMPTY" } else { "SET" },
+            "encrypt: gemini_api_key={}, model={}",
+            if config.secrets.gemini_api_key.is_empty() { "EMPTY" } else { "SET" },
             config.watchlist.gemini_model,
         );
         config.save_encrypted(config_path, passphrase)

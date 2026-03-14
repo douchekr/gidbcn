@@ -53,8 +53,8 @@ where
             let p_borrow = p.borrow();
             if let Some(pass) = p_borrow.as_ref() {
                 tracing::debug!(
-                    "update_config: saving encrypted (watchlist.gemini_api_key={})",
-                    if config.watchlist.gemini_api_key.is_empty() { "EMPTY" } else { "SET" }
+                    "update_config: saving encrypted (gemini_api_key={})",
+                    if config.secrets.gemini_api_key.is_empty() { "EMPTY" } else { "SET" }
                 );
                 config.save_encrypted(CONFIG_PATH, pass)
             } else {
