@@ -159,6 +159,21 @@ async fn async_main() {
         ));
 
         tracing::info!("Bot and scheduler running (plaintext mode)");
+
+        // 평문 모드 경고: 오너에게 암호화 안내 전송
+        {
+            let owner_id = storage::with_config(|c| c.telegram.owner_chat_id);
+            if owner_id != 0 {
+                let warn_bot = tg_bot.clone();
+                tokio::task::spawn_local(async move {
+                    let msg = "⚠️ 평문 모드로 실행 중입니다.\n\
+                               config.json에 API 키가 평문으로 저장되어 있어요.\n\n\
+                               /encrypt [패스프레이즈] 로 암호화하세요.";
+                    let _ = warn_bot.send_message(teloxide::types::ChatId(owner_id), msg).await;
+                });
+            }
+        }
+
         bot::run_bot(api_handle).await;
     }
 }
