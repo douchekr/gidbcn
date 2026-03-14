@@ -55,6 +55,7 @@ pub async fn handle_command(
     cmd: Command,
     api: ApiHandle,
     discovery_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    discovery_trigger: std::sync::Arc<tokio::sync::Notify>,
 ) -> ResponseResult<()> {
     let chat_id = msg.chat.id;
 
@@ -124,7 +125,7 @@ pub async fn handle_command(
             if !is_owner {
                 "이 명령어는 봇 오너만 사용할 수 있습니다.".to_string()
             } else {
-                cmd_watchlist(&args, &api, &discovery_enabled).await
+                cmd_watchlist(&args, &api, &discovery_enabled, &discovery_trigger).await
             }
         }
         Command::Status | Command::St => cmd_status(user_id),
@@ -1260,6 +1261,7 @@ async fn cmd_watchlist(
     args: &str,
     _api: &ApiHandle,
     discovery_enabled: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    discovery_trigger: &std::sync::Arc<tokio::sync::Notify>,
 ) -> String {
     use std::sync::atomic::Ordering;
 
@@ -1289,8 +1291,9 @@ async fn cmd_watchlist(
             }
 
             discovery_enabled.store(true, Ordering::SeqCst);
+            discovery_trigger.notify_one(); // 즉시 1회 실행
             let hours = storage::with_config(|c| c.watchlist.discovery_interval_hours);
-            format!("🔍 디스커버리 시작! ({hours}시간 주기로 자동 실행)\n/w stop 으로 중지")
+            format!("🔍 디스커버리 시작! (즉시 실행 + {hours}시간 주기)\n/w stop 으로 중지")
         }
         "stop" => {
             if !discovery_enabled.load(Ordering::SeqCst) {
