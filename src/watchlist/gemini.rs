@@ -38,14 +38,37 @@ async fn call_gemini(client: &reqwest::Client, prompt: &str) -> Result<String> {
         bail!("Gemini API 오류 ({status}): {text}");
     }
 
-    // 응답에서 텍스트 추출
-    let json: Value = serde_json::from_str(&text).context("Gemini 응답 JSON 파싱 실패")?;
+    extract_gemini_text(&text)
+}
+
+/// Gemini API 응답 JSON에서 텍스트 추출
+fn extract_gemini_text(response_body: &str) -> Result<String> {
+    let json: Value = serde_json::from_str(response_body)
+        .context("Gemini 응답 JSON 파싱 실패")?;
+
+    // 에러 응답 체크
+    if let Some(error) = json.get("error") {
+        let msg = error["message"].as_str().unwrap_or("unknown error");
+        let code = error["code"].as_i64().unwrap_or(0);
+        bail!("Gemini API 에러 (code {code}): {msg}");
+    }
+
     let content = json["candidates"][0]["content"]["parts"][0]["text"]
         .as_str()
-        .unwrap_or("")
-        .to_string();
+        .unwrap_or("");
 
-    Ok(content)
+    if content.is_empty() {
+        // safety 필터 등으로 빈 응답인 경우
+        let finish_reason = json["candidates"][0]["finishReason"]
+            .as_str()
+            .unwrap_or("UNKNOWN");
+        if finish_reason == "SAFETY" {
+            bail!("Gemini 안전 필터에 의해 응답이 차단되었습니다");
+        }
+        bail!("Gemini 응답이 비어있습니다 (finishReason: {finish_reason})");
+    }
+
+    Ok(content.to_string())
 }
 
 /// Gemini 응답에서 JSON 배열 추출 (markdown fence 제거)
@@ -285,7 +308,6 @@ mod tests {
 
     #[test]
     fn extract_json_nested_in_text() {
-        // Gemini가 설명 텍스트를 앞뒤로 붙인 경우
         let input = "Based on your criteria, here are my recommendations:\n\n\
                      [{\"ticker\":\"ABC\",\"score\":88,\"verdict\":\"strong\"}]\n\n\
                      Note: These are not financial advice.";
@@ -293,5 +315,64 @@ mod tests {
         let results: Vec<JudgeResult> = serde_json::from_value(arr).unwrap();
         assert_eq!(results[0].ticker, "ABC");
         assert_eq!(results[0].score, 88.0);
+    }
+
+    // --- Gemini API 응답 파싱 테스트 ---
+
+    #[test]
+    fn gemini_normal_response() {
+        let body = r#"{
+            "candidates": [{
+                "content": {"parts": [{"text": "hello world"}], "role": "model"},
+                "finishReason": "STOP"
+            }]
+        }"#;
+        let text = extract_gemini_text(body).unwrap();
+        assert_eq!(text, "hello world");
+    }
+
+    #[test]
+    fn gemini_error_response() {
+        let body = r#"{
+            "error": {
+                "code": 429,
+                "message": "You exceeded your current quota",
+                "status": "RESOURCE_EXHAUSTED"
+            }
+        }"#;
+        let err = extract_gemini_text(body).unwrap_err();
+        assert!(err.to_string().contains("429"));
+        assert!(err.to_string().contains("quota"));
+    }
+
+    #[test]
+    fn gemini_safety_blocked() {
+        let body = r#"{
+            "candidates": [{
+                "finishReason": "SAFETY",
+                "content": {"parts": [{"text": ""}], "role": "model"}
+            }]
+        }"#;
+        let err = extract_gemini_text(body).unwrap_err();
+        assert!(err.to_string().contains("안전 필터"));
+    }
+
+    #[test]
+    fn gemini_empty_candidates() {
+        let body = r#"{"candidates": []}"#;
+        let err = extract_gemini_text(body).unwrap_err();
+        assert!(err.to_string().contains("비어있습니다"));
+    }
+
+    #[test]
+    fn gemini_invalid_json() {
+        assert!(extract_gemini_text("not json at all").is_err());
+    }
+
+    #[test]
+    fn gemini_missing_text_field() {
+        let body = r#"{"candidates": [{"content": {"parts": []}}]}"#;
+        let err = extract_gemini_text(body).unwrap_err();
+        assert!(err.to_string().contains("비어있습니다"));
     }
 }

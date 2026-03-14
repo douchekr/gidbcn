@@ -1598,3 +1598,108 @@ fn parse_condition(cond_type: &str, params: &[&str]) -> Result<Condition, String
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- extract_options ---
+
+    #[test]
+    fn extract_options_account_only() {
+        let parts = vec!["005930", "10", "70000", "@IRP"];
+        let (rest, account, cp) = extract_options(&parts);
+        assert_eq!(rest, vec!["005930", "10", "70000"]);
+        assert_eq!(account, "IRP");
+        assert!(cp.is_none());
+    }
+
+    #[test]
+    fn extract_options_account_and_price() {
+        let parts = vec!["비트코인", "2", "50000000", "@코인", "=55000000"];
+        let (rest, account, cp) = extract_options(&parts);
+        assert_eq!(rest, vec!["비트코인", "2", "50000000"]);
+        assert_eq!(account, "코인");
+        assert_eq!(cp, Some("55000000"));
+    }
+
+    #[test]
+    fn extract_options_reverse_order() {
+        let parts = vec!["=100", "@계좌", "AAPL"];
+        let (rest, account, cp) = extract_options(&parts);
+        assert_eq!(rest, vec!["AAPL"]);
+        assert_eq!(account, "계좌");
+        assert_eq!(cp, Some("100"));
+    }
+
+    #[test]
+    fn extract_options_none() {
+        let parts = vec!["AAPL", "10", "150"];
+        let (rest, account, cp) = extract_options(&parts);
+        assert_eq!(rest, vec!["AAPL", "10", "150"]);
+        assert_eq!(account, "");
+        assert!(cp.is_none());
+    }
+
+    #[test]
+    fn extract_options_empty() {
+        let parts: Vec<&str> = vec![];
+        let (rest, account, cp) = extract_options(&parts);
+        assert!(rest.is_empty());
+        assert_eq!(account, "");
+        assert!(cp.is_none());
+    }
+
+    // --- parse_condition ---
+
+    #[test]
+    fn parse_price_above() {
+        let c = parse_condition(">", &["80000"]).unwrap();
+        assert!(matches!(c, Condition::PriceAbove { target } if target == 80000.0));
+    }
+
+    #[test]
+    fn parse_price_below() {
+        let c = parse_condition("<", &["50000"]).unwrap();
+        assert!(matches!(c, Condition::PriceBelow { target } if target == 50000.0));
+    }
+
+    #[test]
+    fn parse_profit_above() {
+        let c = parse_condition(">", &["10%"]).unwrap();
+        assert!(matches!(c, Condition::ProfitAbove { percentage } if percentage == 10.0));
+    }
+
+    #[test]
+    fn parse_profit_below() {
+        let c = parse_condition("<", &["-5%"]).unwrap();
+        assert!(matches!(c, Condition::ProfitBelow { percentage } if percentage == -5.0));
+    }
+
+    #[test]
+    fn parse_condition_missing_value() {
+        assert!(parse_condition(">", &[]).is_err());
+    }
+
+    #[test]
+    fn parse_condition_invalid_number() {
+        assert!(parse_condition(">", &["abc"]).is_err());
+    }
+
+    #[test]
+    fn parse_condition_unknown_operator() {
+        assert!(parse_condition("==", &["100"]).is_err());
+    }
+
+    // --- account_tag ---
+
+    #[test]
+    fn account_tag_empty() {
+        assert_eq!(account_tag(""), "");
+    }
+
+    #[test]
+    fn account_tag_with_value() {
+        assert_eq!(account_tag("IRP"), " [@IRP]");
+    }
+}
+
