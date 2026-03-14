@@ -9,7 +9,7 @@ use super::models::{BlacklistEntry, Candidate, CandidateStatus, PromptRecord, Pr
 use crate::models::portfolio::{Holding, Market, PortfolioStore};
 use crate::models::signal::{Condition, Signal, SignalStore};
 
-const DB_PATH: &str = "/opt/kkuepark/gidbcn/watchlist.db";
+const DB_PATH: &str = "/opt/kkuepark/gidbcn/portfolio.db";
 
 thread_local! {
     static DB_CONN: RefCell<Option<Connection>> = RefCell::new(None);

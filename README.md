@@ -31,7 +31,7 @@
 │  │  • 명령어 처리          │         └─────────────┘ │
 │  │  • 시그널 엔진          │                         │
 │  │  • 스케줄러 (interval)  │  직접 호출 (sync)       │
-│  │  • SQLite I/O (holdings/ │◄──────► /opt/.../watchlist.db  │
+│  │  • SQLite I/O (holdings/ │◄──────► /opt/.../portfolio.db  │
 │  │    signals 테이블)       │                                │
 │  └───────────────────────┘                          │
 └─────────────────────────────────────────────────────┘
@@ -121,7 +121,7 @@ gidbcn/
 
 **데이터 파일 경로** (레포 외부): `/opt/kkuepark/gidbcn/`
 - `config.json` — API 키, 토큰, 허용 사용자 목록 (gitignore)
-- `watchlist.db` — SQLite (WAL 모드): 포트폴리오(holdings), 시그널(signals), 워치리스트(candidates, blacklist 등)
+- `portfolio.db` — SQLite (WAL 모드): 포트폴리오(holdings), 시그널(signals), 워치리스트(candidates, blacklist 등)
 - `portfolio.json` / `signals.json` — 레거시. 최초 기동 시 SQLite로 자동 마이그레이션 (삭제 안 함, 백업용 보존)
 
 ---
@@ -275,7 +275,7 @@ custtype: P
 - **환율 없음**: `usd_krw`는 config에 저장하지 않음. actor 시작 시 기본값 1350.0, 이후 해외주식 조회 시 t_rate로 자동 갱신.
 - **log 섹션 자동 마이그레이션**: 기존 config.json에 `log` 키가 없으면 시작 시 defaults 포함해서 자동 저장.
 
-### holdings 테이블 (SQLite, watchlist.db)
+### holdings 테이블 (SQLite, portfolio.db)
 ```sql
 CREATE TABLE holdings (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -297,7 +297,7 @@ CREATE TABLE holdings (
 - **BOND 전용**: `quantity` = 액면가 1,000원 단위, `avg_price`/`cached_price` = 10,000원 액면 기준 가격
   - 평가금액 = `price × quantity × 0.1` (예: qty=50000, price=7485 → 37,425,000원)
 
-### signals 테이블 (SQLite, watchlist.db)
+### signals 테이블 (SQLite, portfolio.db)
 ```sql
 CREATE TABLE signals (
     id          TEXT PRIMARY KEY,       -- UUID v4
@@ -388,7 +388,7 @@ CREATE TABLE signals (
 3. **처단**: 실데이터를 Gemini에 넘겨 점수(0~100) + 판결
 
 프롬프트 미설정 시 `/w run` 불가. 사냥/처단 프롬프트를 각각 설정해야 동작.
-SQLite(`watchlist.db`)에 후보, 블랙리스트, 호출 이력 저장.
+SQLite(`portfolio.db`)에 후보, 블랙리스트, 호출 이력 저장.
 
 ### 시스템
 | 명령어 | 설명 |

@@ -11,7 +11,7 @@
   → handle_command() (commands.rs)
        │
        ├─ [시세 조회 없는 명령: /port add, /port remove, /port edit, /signal*]
-       │    storage::load_*()          // SQLite SELECT (watchlist.db)
+       │    storage::load_*()          // SQLite SELECT (portfolio.db)
        │    데이터 변경
        │    storage::save_*()          // SQLite DELETE+INSERT (트랜잭션)
        │    응답 문자열 반환
@@ -28,7 +28,7 @@
   → bot.send_message()
 ```
 
-**데이터 저장**: `/opt/kkuepark/gidbcn/watchlist.db` (SQLite, WAL 모드)
+**데이터 저장**: `/opt/kkuepark/gidbcn/portfolio.db` (SQLite, WAL 모드)
 - `holdings` 테이블 — 전체 사용자 포트폴리오 (user_id 컬럼)
 - `signals` 테이블 — 전체 사용자 시그널 (user_id 컬럼)
 - `candidates`, `blacklist`, `prompts` 등 워치리스트 테이블도 동일 DB
@@ -379,7 +379,7 @@ Mutex 없이 채널만으로 동시성 확보.
 1. 사냥 (Gemini) → 후보 종목 목록
 2. 데이터 수집 (한투 API HHDFS76200200) → 시세/재무 상세
 3. 처단 (Gemini + 실데이터) → 점수(0~100) + 판결
-4. DB 업데이트 (SQLite watchlist.db)
+4. DB 업데이트 (SQLite portfolio.db)
 ```
 
 ### 프롬프트 관리
@@ -389,7 +389,7 @@ Mutex 없이 채널만으로 동시성 확보.
 - DB `prompts` 테이블에 저장, 텔레그램에서 실시간 수정 가능.
 
 ### 데이터 저장
-- **SQLite** (`/opt/kkuepark/gidbcn/watchlist.db`, WAL 모드)
+- **SQLite** (`/opt/kkuepark/gidbcn/portfolio.db`, WAL 모드)
 - `thread_local! RefCell<Option<Connection>>` — LocalSet 덕에 `!Send` OK
 - 테이블: candidates, blacklist, prompts, prompt_history, api_usage, holdings, signals
 
