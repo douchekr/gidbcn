@@ -16,7 +16,8 @@
     "max_gemini_calls_per_day": 250,
     "candidate_count": 30,
     "hunt_interval_minutes": 30,
-    "min_score": 60.0
+    "min_score": 60.0,
+    "retention_days": 100
   },
   "kis_base_url": "https://openapi.koreainvestment.com:9443",
   "secrets": {

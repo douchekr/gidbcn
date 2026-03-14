@@ -368,8 +368,8 @@ CREATE TABLE signals (
 ### 워치리스트 (`/watch` 또는 `/w`)
 | 명령어 | 설명 |
 |---|---|
-| `/w run` | 디스커버리 시작 (자동 주기 실행, 기본 8시간) |
-| `/w stop` | 디스커버리 중지 |
+| `/w run` | 사냥 시작 (즉시 1회 + 자동 주기) |
+| `/w stop` | 사냥 중지 |
 | `/w ls` | 평가 완료 종목 (점수순) |
 | `/w pending` | 대기 중 후보 |
 | `/w info [TICKER]` | 종목 상세 |
@@ -379,17 +379,29 @@ CREATE TABLE signals (
 | `/w budget` | 오늘 Gemini API 사용량 |
 | `/w prompt hunt show` | 사냥용 프롬프트 확인 |
 | `/w prompt hunt set [내용]` | 사냥용 프롬프트 설정 |
-| `/w prompt judge show` | 처단용 프롬프트 확인 |
-| `/w prompt judge set [내용]` | 처단용 프롬프트 설정 |
+| `/w prompt judge show` | 평가용 프롬프트 확인 |
+| `/w prompt judge set [내용]` | 평가용 프롬프트 설정 |
 | `/w hist` | 최근 Gemini 호출 이력 |
 
-**2-Track 파이프라인**:
-1. **사냥** (Track 1): Gemini가 사용자 프롬프트 기반으로 후보 종목 수집
-2. **데이터 수집** (Track 2): 한투 API로 실제 시세/재무 데이터 확보
-3. **처단**: 실데이터를 Gemini에 넘겨 점수(0~100) + 판결
+**사냥 사이클** (`/w run` → 30분 주기 자동):
+1. **사냥**: Gemini가 프롬프트 기반으로 후보 수집 → pending
+2. **수집**: 한투 API로 1개씩 순차 조회 (라운드로빈) → collected (실패 → 자동 BL)
+3. **평가**: collected 모아서 Gemini 평가 → 점수(0~100) + 판결
+4. **처단**: min_score 미달 → 자동 블랙리스트
 
-프롬프트 미설정 시 `/w run` 불가. 사냥/처단 프롬프트를 각각 설정해야 동작.
+프롬프트 미설정 시 `/w run` 불가. hunt/judge 프롬프트를 각각 설정해야 동작.
 SQLite(`portfolio.db`)에 후보, 블랙리스트, 호출 이력 저장.
+retention_days(기본 100일) 초과 데이터 사이클 시작 시 자동 정리.
+
+**watchlist 설정** (config.json):
+| 키 | 기본값 | 설명 |
+|---|---|---|
+| `gemini_model` | gemini-2.5-flash | Gemini 모델 |
+| `max_gemini_calls_per_day` | 250 | 일일 Gemini 호출 한도 |
+| `candidate_count` | 30 | 사냥당 후보 수 |
+| `hunt_interval_minutes` | 30 | 사냥 주기 (분) |
+| `min_score` | 60.0 | 처단 기준 점수 |
+| `retention_days` | 100 | 데이터 보관 기간 (일) |
 
 ### 시스템
 | 명령어 | 설명 |
