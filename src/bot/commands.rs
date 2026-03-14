@@ -82,6 +82,14 @@ pub async fn handle_command(
         bot.send_message(chat_id, format!(
             "✅ 봇 오너로 등록되었습니다. (chat_id: {user_id})"
         )).await?;
+        // 평문 모드 경고
+        if !storage::is_encrypted() {
+            bot.send_message(chat_id,
+                "⚠️ 평문 모드로 실행 중입니다.\n\
+                 config.json에 API 키가 평문으로 저장되어 있어요.\n\n\
+                 /encrypt [패스프레이즈] 로 암호화하세요."
+            ).await?;
+        }
         user_id
     } else {
         owner_chat_id

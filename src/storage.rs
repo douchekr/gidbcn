@@ -27,6 +27,11 @@ pub fn set_passphrase(passphrase: &str) {
     PASSPHRASE.with(|p| *p.borrow_mut() = Some(passphrase.to_string()));
 }
 
+/// 현재 암호화 모드인지
+pub fn is_encrypted() -> bool {
+    PASSPHRASE.with(|p| p.borrow().is_some())
+}
+
 /// 메모리 config 읽기 전용.
 pub fn with_config<F, R>(f: F) -> R
 where
