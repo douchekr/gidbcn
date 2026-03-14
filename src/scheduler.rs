@@ -68,7 +68,7 @@ async fn run_discovery(api: &ApiHandle, bot: &Bot) {
 
     match pipeline::run_discovery_cycle(api, &client).await {
         Ok(report) => {
-            let msg = format!("🔄 디스커버리 완료\n\n{}", report.summary());
+            let msg = report.summary();
             tracing::info!("Discovery completed");
             if owner_id != 0 {
                 let _ = bot.send_message(ChatId(owner_id), &msg).await;

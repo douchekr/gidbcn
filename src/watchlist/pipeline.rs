@@ -16,19 +16,11 @@ pub struct CycleReport {
 
 impl CycleReport {
     pub fn summary(&self) -> String {
-        let evaluated = self.survived + self.culled;
-        let mut lines = vec![
-            format!("🎯 사냥: {}개 후보", self.hunted),
-            format!("📊 데이터 수집: {}개", self.detailed),
-            format!("✅ 생존: {}개 / ⚖️ 처단: {}개 ({}개 평가)", self.survived, self.culled, evaluated),
-        ];
-        if !self.errors.is_empty() {
-            lines.push(format!("⚠️ 오류: {}건", self.errors.len()));
-            for e in &self.errors {
-                lines.push(format!("  - {e}"));
-            }
-        }
-        lines.join("\n")
+        let err = if self.errors.is_empty() { String::new() } else { format!(" ❗{}", self.errors.len()) };
+        format!(
+            "🎯 사냥완료 ({}후보 → ✅{}생존 ⚖️{}처단{})",
+            self.hunted, self.survived, self.culled, err,
+        )
     }
 }
 
@@ -214,12 +206,11 @@ mod tests {
             errors: vec!["XYZ: 조회 실패".to_string()],
         };
         let summary = report.summary();
-        assert!(summary.contains("사냥: 30개"));
-        assert!(summary.contains("데이터 수집: 28개"));
-        assert!(summary.contains("생존: 20개"));
-        assert!(summary.contains("처단: 5개"));
-        assert!(summary.contains("25개 평가"));
-        assert!(summary.contains("오류: 1건"));
+        assert!(summary.contains("사냥완료"));
+        assert!(summary.contains("30후보"));
+        assert!(summary.contains("✅20생존"));
+        assert!(summary.contains("⚖️5처단"));
+        assert!(summary.contains("❗1"));
     }
 
     #[test]
@@ -232,8 +223,8 @@ mod tests {
             errors: Vec::new(),
         };
         let summary = report.summary();
-        assert!(!summary.contains("오류"));
-        assert!(summary.contains("생존: 8개"));
-        assert!(summary.contains("처단: 2개"));
+        assert!(!summary.contains("❗"));
+        assert!(summary.contains("✅8생존"));
+        assert!(summary.contains("⚖️2처단"));
     }
 }
