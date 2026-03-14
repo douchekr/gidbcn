@@ -14,12 +14,14 @@ pub struct Candidate {
     pub prompt_id: Option<i64>,
     pub created_at: String,
     pub judged_at: Option<String>,
+    pub detail_text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CandidateStatus {
     Pending,
+    Collected,
     Judged,
     Blacklisted,
 }
@@ -28,6 +30,7 @@ impl CandidateStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Pending => "pending",
+            Self::Collected => "collected",
             Self::Judged => "judged",
             Self::Blacklisted => "blacklisted",
         }
@@ -35,6 +38,7 @@ impl CandidateStatus {
 
     pub fn from_str(s: &str) -> Self {
         match s {
+            "collected" => Self::Collected,
             "judged" => Self::Judged,
             "blacklisted" => Self::Blacklisted,
             _ => Self::Pending,

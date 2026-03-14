@@ -21,11 +21,19 @@ pub async fn run_scheduler(
     let signal_interval = Duration::from_secs(interval_min * 60);
     let mut signal_tick = interval(signal_interval);
 
-    let discovery_hours = storage::with_config(|c| c.watchlist.discovery_interval_hours);
-    let discovery_interval = Duration::from_secs(discovery_hours * 3600);
-    let mut discovery_tick = interval(discovery_interval);
+    let hunt_min = storage::with_config(|c| c.watchlist.hunt_interval_minutes);
+    let mut hunt_tick = interval(Duration::from_secs(hunt_min * 60));
 
-    tracing::info!("Scheduler started: signal check every {interval_min}min, discovery every {discovery_hours}h");
+    let collect_min = storage::with_config(|c| c.watchlist.collect_interval_minutes);
+    let mut collect_tick = interval(Duration::from_secs(collect_min * 60));
+
+    let eval_hours = storage::with_config(|c| c.watchlist.evaluate_interval_hours);
+    let mut evaluate_tick = interval(Duration::from_secs(eval_hours * 3600));
+
+    tracing::info!(
+        "Scheduler started: signal {}min, hunt {}min, collect {}min, evaluate {}h",
+        interval_min, hunt_min, collect_min, eval_hours,
+    );
 
     loop {
         tokio::select! {
@@ -42,43 +50,87 @@ pub async fn run_scheduler(
                     }
                 }
             }
-            _ = discovery_tick.tick() => {
-                if discovery_enabled.load(Ordering::SeqCst) {
-                    run_discovery(&api, &bot).await;
+            _ = hunt_tick.tick() => {
+                if !discovery_enabled.load(Ordering::SeqCst) {
+                    continue;
                 }
+                if !prompts_configured() {
+                    continue;
+                }
+                run_hunt(&bot).await;
+            }
+            _ = collect_tick.tick() => {
+                if !discovery_enabled.load(Ordering::SeqCst) {
+                    continue;
+                }
+                // 라운드로빈: pending 1개 수집
+                pipeline::collect_one(&api).await;
+            }
+            _ = evaluate_tick.tick() => {
+                if !discovery_enabled.load(Ordering::SeqCst) {
+                    continue;
+                }
+                if !prompts_configured() {
+                    continue;
+                }
+                run_evaluate(&bot).await;
             }
             _ = discovery_trigger.notified() => {
-                run_discovery(&api, &bot).await;
+                // /w run 즉시 실행: 사냥 1회
+                run_hunt(&bot).await;
             }
         }
     }
 }
 
-async fn run_discovery(api: &ApiHandle, bot: &Bot) {
-    let hunt_ok = wdb::get_prompt(PromptType::Hunt).ok().flatten().is_some();
-    let judge_ok = wdb::get_prompt(PromptType::Judge).ok().flatten().is_some();
-    if !hunt_ok || !judge_ok {
-        tracing::debug!("Discovery skipped: prompts not configured");
-        return;
-    }
+fn prompts_configured() -> bool {
+    wdb::get_prompt(PromptType::Hunt).ok().flatten().is_some()
+        && wdb::get_prompt(PromptType::Judge).ok().flatten().is_some()
+}
 
-    tracing::info!("Running discovery cycle...");
+async fn run_hunt(bot: &Bot) {
+    tracing::info!("Running hunt...");
     let client = reqwest::Client::new();
     let owner_id = storage::with_config(|c| c.telegram.owner_chat_id);
 
-    match pipeline::run_discovery_cycle(api, &client).await {
+    match pipeline::run_hunt(&client).await {
         Ok(report) => {
-            let msg = report.summary();
-            tracing::info!("Discovery completed");
+            let msg = format!("🎯 사냥완료 ({}개 후보)", report.hunted);
+            tracing::info!("{msg}");
             if owner_id != 0 {
                 let _ = bot.send_message(ChatId(owner_id), &msg).await;
             }
         }
         Err(e) => {
-            tracing::error!("Discovery failed: {e:#}");
+            tracing::error!("Hunt failed: {e:#}");
             if owner_id != 0 {
-                let msg = format!("❌ 디스커버리 실패\n{e:#}");
+                let _ = bot.send_message(ChatId(owner_id), format!("❌ 사냥 실패: {e:#}")).await;
+            }
+        }
+    }
+}
+
+async fn run_evaluate(bot: &Bot) {
+    let client = reqwest::Client::new();
+    let owner_id = storage::with_config(|c| c.telegram.owner_chat_id);
+
+    match pipeline::run_evaluate(&client).await {
+        Ok(report) => {
+            let total = report.survived + report.culled;
+            if total == 0 {
+                tracing::debug!("No collected candidates to evaluate");
+                return;
+            }
+            let msg = report.summary();
+            tracing::info!("{msg}");
+            if owner_id != 0 {
                 let _ = bot.send_message(ChatId(owner_id), &msg).await;
+            }
+        }
+        Err(e) => {
+            tracing::error!("Evaluate failed: {e:#}");
+            if owner_id != 0 {
+                let _ = bot.send_message(ChatId(owner_id), format!("❌ 평가 실패: {e:#}")).await;
             }
         }
     }

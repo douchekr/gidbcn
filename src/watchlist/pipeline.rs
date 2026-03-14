@@ -5,21 +5,23 @@ use crate::models::messages::OverseasDetail;
 
 use super::{db, gemini, models::CandidateStatus};
 
-/// 디스커버리 사이클 결과
-pub struct CycleReport {
+/// 사냥 결과
+pub struct HuntReport {
     pub hunted: usize,
-    pub detailed: usize,
-    pub survived: usize,
-    pub culled: usize,
-    pub errors: Vec<String>,
 }
 
-impl CycleReport {
+/// 평가 결과
+pub struct EvaluateReport {
+    pub survived: usize,
+    pub culled: usize,
+}
+
+impl EvaluateReport {
     pub fn summary(&self) -> String {
-        let err = if self.errors.is_empty() { String::new() } else { format!(" ❗{}", self.errors.len()) };
+        let total = self.survived + self.culled;
         format!(
-            "🎯 사냥완료 ({}후보 → ✅{}생존 ⚖️{}처단{})",
-            self.hunted, self.survived, self.culled, err,
+            "⚖️ 평가완료 ({}개 → ✅{}생존 ⚖️{}처단)",
+            total, self.survived, self.culled,
         )
     }
 }
@@ -54,9 +56,8 @@ fn format_detail_for_gemini(ticker: &str, d: &OverseasDetail) -> String {
     )
 }
 
-/// 거래소 코드 추정 (대부분 NAS, 없으면 NYS, AMS 순회)
+/// 거래소 코드 추정 (NAS → NYS → AMS 순회)
 async fn fetch_detail(api: &ApiHandle, ticker: &str) -> Result<OverseasDetail> {
-    // NAS 먼저 시도, 실패하면 NYS, AMS
     for exch in &["NAS", "NYS", "AMS"] {
         match api.get_overseas_detail(exch, ticker).await {
             Ok(detail) if detail.current_price > 0.0 => return Ok(detail),
@@ -66,84 +67,71 @@ async fn fetch_detail(api: &ApiHandle, ticker: &str) -> Result<OverseasDetail> {
     anyhow::bail!("{ticker}: 모든 거래소에서 조회 실패")
 }
 
-/// 전체 디스커버리 사이클 실행
-///
-/// 1. 사냥: Gemini → 후보 목록
-/// 2. 데이터 수집: 한투 API → 종목 상세
-/// 3. 평가: Gemini + 실데이터 → 점수/판결 → 기준 미달 처단(BL)
-/// 4. DB 업데이트
-pub async fn run_discovery_cycle(
-    api: &ApiHandle,
-    http_client: &reqwest::Client,
-) -> Result<CycleReport> {
-    let mut report = CycleReport {
-        hunted: 0,
-        detailed: 0,
-        survived: 0,
-        culled: 0,
-        errors: Vec::new(),
-    };
+// === A: 사냥 ===
 
-    // 1. 사냥
-    let candidates = match gemini::hunt(http_client).await {
-        Ok(c) => c,
-        Err(e) => {
-            return Err(e.context("사냥 실패"));
+pub async fn run_hunt(http_client: &reqwest::Client) -> Result<HuntReport> {
+    let candidates = gemini::hunt(http_client).await
+        .context("사냥 실패")?;
+    Ok(HuntReport { hunted: candidates.len() })
+}
+
+// === B: 수집 (라운드로빈 — 1개씩) ===
+
+/// pending 중 가장 오래된 1개를 수집. 성공 → collected, 실패 → BL.
+/// 수집할 게 없으면 None 리턴.
+pub async fn collect_one(api: &ApiHandle) -> Option<(String, bool)> {
+    let pending = db::list_candidates(Some(CandidateStatus::Pending)).ok()?;
+    let candidate = pending.first()?;
+    let ticker = candidate.ticker.clone();
+    let id = candidate.id;
+
+    match fetch_detail(api, &ticker).await {
+        Ok(detail) => {
+            let text = format_detail_for_gemini(&ticker, &detail);
+            if let Err(e) = db::update_candidate_collected(id, &text) {
+                tracing::error!("수집 데이터 저장 실패 {ticker}: {e:#}");
+                return Some((ticker, false));
+            }
+            tracing::debug!("수집 완료: {ticker}");
+            Some((ticker, true))
         }
-    };
-    report.hunted = candidates.len();
+        Err(e) => {
+            tracing::warn!("수집 실패 → BL: {ticker}: {e:#}");
+            let _ = db::add_blacklist(&ticker, "한투 API 조회 실패 (자동)");
+            let _ = db::update_candidate_status(id, CandidateStatus::Blacklisted);
+            Some((ticker, false))
+        }
+    }
+}
 
-    if candidates.is_empty() {
+// === C: 평가 ===
+
+pub async fn run_evaluate(http_client: &reqwest::Client) -> Result<EvaluateReport> {
+    let mut report = EvaluateReport { survived: 0, culled: 0 };
+
+    let collected = db::list_candidates(Some(CandidateStatus::Collected))
+        .context("collected 후보 조회 실패")?;
+
+    if collected.is_empty() {
         return Ok(report);
     }
 
-    // 2. 한투 API로 상세 데이터 수집
-    let mut detail_texts = Vec::new();
-    let mut detail_candidate_ids = Vec::new();
+    // detail_text 합쳐서 Gemini에 전달
+    let combined_data: String = collected.iter()
+        .map(|c| c.detail_text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n---\n");
 
-    // pending 상태의 후보를 DB에서 가져옴 (방금 사냥으로 저장된 것 포함)
-    let pending = db::list_candidates(Some(CandidateStatus::Pending))
-        .context("pending 후보 조회 실패")?;
+    let judge_results = gemini::judge(http_client, &combined_data).await
+        .context("평가 실패")?;
 
-    for candidate in &pending {
-        match fetch_detail(api, &candidate.ticker).await {
-            Ok(detail) => {
-                detail_texts.push(format_detail_for_gemini(&candidate.ticker, &detail));
-                detail_candidate_ids.push(candidate.id);
-                report.detailed += 1;
-            }
-            Err(e) => {
-                let msg = format!("{}: {e}", candidate.ticker);
-                tracing::warn!("데이터 수집 실패 → 블랙리스트: {msg}");
-                let _ = db::add_blacklist(&candidate.ticker, "한투 API 조회 실패 (자동)");
-                let _ = db::update_candidate_status(candidate.id, CandidateStatus::Blacklisted);
-                report.errors.push(msg);
-            }
-        }
-    }
-
-    if detail_texts.is_empty() {
-        report.errors.push("데이터 수집된 종목 없음".to_string());
-        return Ok(report);
-    }
-
-    // 3. 평가: 수집한 데이터를 Gemini에게 평가 요청
-    let combined_data = detail_texts.join("\n---\n");
-    let judge_results = match gemini::judge(http_client, &combined_data).await {
-        Ok(r) => r,
-        Err(e) => {
-            report.errors.push(format!("평가 실패: {e}"));
-            return Ok(report);
-        }
-    };
-
-    // 4. DB 업데이트 + 기준 점수 미달 → 블랙리스트 (처단)
     let min_score = crate::storage::with_config(|c| c.watchlist.min_score);
+
     for jr in &judge_results {
         let ticker = jr.ticker.to_uppercase();
-        if let Some(candidate) = pending.iter().find(|c| c.ticker == ticker) {
+        if let Some(candidate) = collected.iter().find(|c| c.ticker == ticker) {
             if let Err(e) = db::update_candidate_judge(candidate.id, jr.score, &jr.verdict) {
-                report.errors.push(format!("{ticker} DB 업데이트 실패: {e}"));
+                tracing::error!("{ticker} DB 업데이트 실패: {e:#}");
             } else if jr.score < min_score {
                 let reason = format!("처단: {:.0}점 < 기준 {:.0}점", jr.score, min_score);
                 let _ = db::add_blacklist(&ticker, &reason);
@@ -156,8 +144,8 @@ pub async fn run_discovery_cycle(
     }
 
     tracing::info!(
-        "디스커버리 사이클 완료: 사냥 {}개, 데이터 {}개, 생존 {}개, 처단 {}개",
-        report.hunted, report.detailed, report.survived, report.culled
+        "평가 완료: 생존 {}개, 처단 {}개",
+        report.survived, report.culled
     );
 
     Ok(report)
@@ -197,33 +185,10 @@ mod tests {
     }
 
     #[test]
-    fn cycle_report_summary() {
-        let report = CycleReport {
-            hunted: 30,
-            detailed: 28,
-            survived: 20,
-            culled: 5,
-            errors: vec!["XYZ: 조회 실패".to_string()],
-        };
+    fn evaluate_report_summary() {
+        let report = EvaluateReport { survived: 8, culled: 2 };
         let summary = report.summary();
-        assert!(summary.contains("사냥완료"));
-        assert!(summary.contains("30후보"));
-        assert!(summary.contains("✅20생존"));
-        assert!(summary.contains("⚖️5처단"));
-        assert!(summary.contains("❗1"));
-    }
-
-    #[test]
-    fn cycle_report_no_errors() {
-        let report = CycleReport {
-            hunted: 10,
-            detailed: 10,
-            survived: 8,
-            culled: 2,
-            errors: Vec::new(),
-        };
-        let summary = report.summary();
-        assert!(!summary.contains("❗"));
+        assert!(summary.contains("평가완료"));
         assert!(summary.contains("✅8생존"));
         assert!(summary.contains("⚖️2처단"));
     }

@@ -1299,9 +1299,17 @@ async fn cmd_watchlist(
             }
 
             discovery_enabled.store(true, Ordering::SeqCst);
-            discovery_trigger.notify_one(); // 즉시 1회 실행
-            let hours = storage::with_config(|c| c.watchlist.discovery_interval_hours);
-            format!("🔍 디스커버리 시작! (즉시 실행 + {hours}시간 주기)\n/w stop 으로 중지")
+            discovery_trigger.notify_one(); // 즉시 사냥 1회
+            let (hunt, collect, eval) = storage::with_config(|c| (
+                c.watchlist.hunt_interval_minutes,
+                c.watchlist.collect_interval_minutes,
+                c.watchlist.evaluate_interval_hours,
+            ));
+            format!(
+                "🔍 사냥 시작! (즉시 1회 + 자동)\n\
+                 사냥 {hunt}분 / 수집 {collect}분 / 평가 {eval}시간\n\
+                 /w stop 으로 중지"
+            )
         }
         "stop" => {
             if !discovery_enabled.load(Ordering::SeqCst) {
@@ -1318,7 +1326,7 @@ async fn cmd_watchlist(
         "prompt" => cmd_watch_prompt(&rest),
         "history" | "hist" => cmd_watch_history(),
         _ => "📋 워치리스트 명령어\n\n\
-              /w run — 디스커버리 시작 (자동 주기 실행)\n\
+              /w run — 사냥 시작 (사냥/수집/평가 자동)\n\
               /w stop — 디스커버리 중지\n\
               /w ls — 평가 완료 종목 (점수순)\n\
               /w pending — 대기 중 후보\n\

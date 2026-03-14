@@ -34,7 +34,8 @@ pub fn init_db() -> Result<()> {
             status      TEXT NOT NULL DEFAULT 'pending',
             prompt_id   INTEGER,
             created_at  TEXT NOT NULL,
-            judged_at   TEXT
+            judged_at   TEXT,
+            detail_text TEXT NOT NULL DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS blacklist (
@@ -103,6 +104,9 @@ pub fn init_db() -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_signals_active ON signals(active);",
     )?;
 
+    // 기존 DB 마이그레이션: detail_text 컬럼 추가
+    let _ = conn.execute("ALTER TABLE candidates ADD COLUMN detail_text TEXT NOT NULL DEFAULT ''", []);
+
     DB_CONN.with(|c| *c.borrow_mut() = Some(conn));
     tracing::info!("watchlist DB initialized: {DB_PATH}");
 
@@ -148,12 +152,12 @@ pub fn list_candidates(status: Option<CandidateStatus>) -> Result<Vec<Candidate>
     with_db(|conn| {
         let (sql, param): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match status {
             Some(s) => (
-                "SELECT id, ticker, name, sector, reason, score, verdict, status, prompt_id, created_at, judged_at
+                "SELECT id, ticker, name, sector, reason, score, verdict, status, prompt_id, created_at, judged_at, detail_text
                  FROM candidates WHERE status = ?1 ORDER BY score DESC, id DESC",
                 vec![Box::new(s.as_str().to_string())],
             ),
             None => (
-                "SELECT id, ticker, name, sector, reason, score, verdict, status, prompt_id, created_at, judged_at
+                "SELECT id, ticker, name, sector, reason, score, verdict, status, prompt_id, created_at, judged_at, detail_text
                  FROM candidates ORDER BY score DESC, id DESC",
                 vec![],
             ),
@@ -173,6 +177,7 @@ pub fn list_candidates(status: Option<CandidateStatus>) -> Result<Vec<Candidate>
                 prompt_id: row.get(8)?,
                 created_at: row.get(9)?,
                 judged_at: row.get(10)?,
+                detail_text: row.get(11)?,
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
@@ -191,6 +196,16 @@ pub fn update_candidate_judge(id: i64, score: f64, verdict: &str) -> Result<()> 
     })
 }
 
+pub fn update_candidate_collected(id: i64, detail_text: &str) -> Result<()> {
+    with_db(|conn| {
+        conn.execute(
+            "UPDATE candidates SET status = 'collected', detail_text = ?1 WHERE id = ?2",
+            params![detail_text, id],
+        )?;
+        Ok(())
+    })
+}
+
 pub fn update_candidate_status(id: i64, status: CandidateStatus) -> Result<()> {
     with_db(|conn| {
         conn.execute(
@@ -204,7 +219,7 @@ pub fn update_candidate_status(id: i64, status: CandidateStatus) -> Result<()> {
 pub fn get_candidate_by_ticker(ticker: &str) -> Result<Option<Candidate>> {
     with_db(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT id, ticker, name, sector, reason, score, verdict, status, prompt_id, created_at, judged_at
+            "SELECT id, ticker, name, sector, reason, score, verdict, status, prompt_id, created_at, judged_at, detail_text
              FROM candidates WHERE ticker = ?1 ORDER BY id DESC LIMIT 1",
         )?;
         let mut rows = stmt.query_map(params![ticker], |row| {
@@ -220,6 +235,7 @@ pub fn get_candidate_by_ticker(ticker: &str) -> Result<Option<Candidate>> {
                 prompt_id: row.get(8)?,
                 created_at: row.get(9)?,
                 judged_at: row.get(10)?,
+                detail_text: row.get(11)?,
             })
         })?;
         Ok(rows.next().and_then(|r| r.ok()))
@@ -624,7 +640,8 @@ mod tests {
                 name TEXT NOT NULL DEFAULT '', sector TEXT NOT NULL DEFAULT '',
                 reason TEXT NOT NULL DEFAULT '', score REAL, verdict TEXT,
                 status TEXT NOT NULL DEFAULT 'pending', prompt_id INTEGER,
-                created_at TEXT NOT NULL, judged_at TEXT
+                created_at TEXT NOT NULL, judged_at TEXT,
+                detail_text TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS blacklist (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL UNIQUE,

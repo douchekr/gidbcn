@@ -15,7 +15,9 @@
     "gemini_model": "gemini-2.5-flash",
     "max_gemini_calls_per_day": 250,
     "candidate_count": 30,
-    "discovery_interval_hours": 1,
+    "hunt_interval_minutes": 30,
+    "collect_interval_minutes": 2,
+    "evaluate_interval_hours": 2,
     "min_score": 60.0
   },
   "kis_base_url": "https://openapi.koreainvestment.com:9443",
