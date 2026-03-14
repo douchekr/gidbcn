@@ -1337,7 +1337,7 @@ fn cmd_watch_list() -> String {
     for (i, c) in candidates.iter().enumerate().take(30) {
         let score = c.score.map_or("-".to_string(), |s| format!("{s:.0}"));
         let verdict = c.verdict.as_deref().unwrap_or("");
-        let verdict_short = if verdict.len() > 40 { &verdict[..40] } else { verdict };
+        let verdict_short = truncate_chars(verdict, 40);
         msg.push_str(&format!(
             "\n{}. {} ({}) [{score}점]\n   {verdict_short}",
             i + 1, c.ticker, c.sector,
@@ -1491,11 +1491,7 @@ fn cmd_watch_history() -> String {
     }
     let mut msg = format!("📜 최근 Gemini 호출 이력 ({}건)\n", records.len());
     for r in &records {
-        let tickers_short = if r.tickers_extracted.len() > 50 {
-            format!("{}...", &r.tickers_extracted[..50])
-        } else {
-            r.tickers_extracted.clone()
-        };
+        let tickers_short = truncate_chars_owned(&r.tickers_extracted, 50);
         msg.push_str(&format!(
             "\n#{} [{}] {} — {}\n   종목: {}",
             r.id, r.prompt_type, r.status, r.created_at, tickers_short,
@@ -1713,6 +1709,22 @@ mod tests {
     #[test]
     fn account_tag_with_value() {
         assert_eq!(account_tag("IRP"), " [@IRP]");
+    }
+}
+
+/// UTF-8 안전하게 `max_chars`글자로 자르기 (borrowed)
+fn truncate_chars(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
+    }
+}
+
+/// UTF-8 안전하게 `max_chars`글자로 자르기 (owned, 잘렸으면 "..." 붙임)
+fn truncate_chars_owned(s: &str, max_chars: usize) -> String {
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => format!("{}...", &s[..idx]),
+        None => s.to_string(),
     }
 }
 
