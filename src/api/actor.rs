@@ -154,6 +154,11 @@ pub async fn run_api_actor(mut rx: mpsc::Receiver<ApiRequest>) {
                 let result = stock_info::get_stock_name(&ctx, &prdt_type_cd, &pdno).await;
                 let _ = respond_to.send(result);
             }
+            ApiRequest::GetOverseasDetail { exchange: exch, symbol, respond_to } => {
+                ctx.rate_limit().await;
+                let result = overseas::get_detail(&ctx, &exch, &symbol).await;
+                let _ = respond_to.send(result);
+            }
         }
     }
 
@@ -225,6 +230,23 @@ impl ApiHandle {
             .send(ApiRequest::GetStockName {
                 prdt_type_cd: market.product_type_code().to_string(),
                 pdno: symbol.to_string(),
+                respond_to: tx,
+            })
+            .await?;
+        rx.await?
+    }
+
+    /// 해외주식 상세 (워치리스트 평가용)
+    pub async fn get_overseas_detail(
+        &self,
+        exchange: &str,
+        symbol: &str,
+    ) -> Result<crate::models::messages::OverseasDetail> {
+        let (tx, rx) = oneshot::channel();
+        self.sender
+            .send(ApiRequest::GetOverseasDetail {
+                exchange: exchange.to_string(),
+                symbol: symbol.to_string(),
                 respond_to: tx,
             })
             .await?;
