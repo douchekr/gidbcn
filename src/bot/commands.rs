@@ -9,6 +9,7 @@ use crate::bot::formatter;
 use crate::models::messages::PriceData;
 use crate::models::portfolio::{Holding, Market};
 use crate::models::signal::{Condition, Signal};
+use crate::watchlist::{db as wdb, models::PromptType, pipeline};
 use uuid::Uuid;
 use crate::storage;
 
@@ -35,6 +36,10 @@ pub enum Command {
     Ping,
     #[command(description = "사용자 관리 (오너 전용): /user add|rm|ls")]
     User(String),
+    #[command(description = "워치리스트: /watch run|ls|pending|info|bl|budget|prompt|history")]
+    Watch(String),
+    #[command(description = "워치리스트 단축 (/w)")]
+    W(String),
 }
 
 pub async fn handle_command(
@@ -107,6 +112,7 @@ pub async fn handle_command(
         Command::Ping => "pong".to_string(),
         Command::Port(args) | Command::P(args) => cmd_port(user_id, &args, &api).await,
         Command::Signal(args) | Command::S(args) => cmd_signal(user_id, &args),
+        Command::Watch(args) | Command::W(args) => cmd_watchlist(&args, &api).await,
         Command::Status | Command::St => cmd_status(user_id),
         Command::User(args) => {
             if !is_owner {
@@ -151,6 +157,15 @@ fn help_text() -> String {
      시스템:\n\
      /status|st — 시스템 상태\n\
      /ping — 핑\n\n\
+     워치리스트 (/watch 또는 /w):\n\
+     /w run — 디스커버리 사이클\n\
+     /w ls — 평가 완료 종목\n\
+     /w pending — 대기 중 후보\n\
+     /w info [TICKER] — 종목 상세\n\
+     /w bl — 블랙리스트 관리\n\
+     /w budget — Gemini 사용량\n\
+     /w prompt hunt|judge show|set\n\
+     /w hist — 호출 이력\n\n\
      사용자 관리 (/user, 오너 전용):\n\
      /user add|a [chat_id]\n\
      /user rm [chat_id]\n\
@@ -1215,6 +1230,243 @@ fn cmd_status(user_id: i64) -> String {
         signals.signals.len(),
         active,
     )
+}
+
+// --- 워치리스트 ---
+
+async fn cmd_watchlist(args: &str, api: &ApiHandle) -> String {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    let sub = parts.first().copied().unwrap_or("");
+    let rest = parts.get(1..).unwrap_or(&[]).join(" ");
+
+    match sub {
+        "run" => cmd_watch_run(api).await,
+        "list" | "ls" => cmd_watch_list(),
+        "pending" => cmd_watch_pending(),
+        "info" | "i" => cmd_watch_info(&rest.to_uppercase()),
+        "blacklist" | "bl" => cmd_watch_blacklist(&rest),
+        "budget" => cmd_watch_budget(),
+        "prompt" => cmd_watch_prompt(&rest),
+        "history" | "hist" => cmd_watch_history(),
+        _ => "📋 워치리스트 명령어\n\n\
+              /w run — 디스커버리 사이클 실행\n\
+              /w ls — 평가 완료 종목 (점수순)\n\
+              /w pending — 대기 중 후보\n\
+              /w info [TICKER] — 종목 상세\n\
+              /w bl — 블랙리스트\n\
+              /w bl add [TICKER] [사유]\n\
+              /w bl rm [TICKER]\n\
+              /w budget — 오늘 Gemini 사용량\n\
+              /w prompt hunt show|set\n\
+              /w prompt judge show|set\n\
+              /w hist — 최근 호출 이력"
+            .to_string(),
+    }
+}
+
+async fn cmd_watch_run(api: &ApiHandle) -> String {
+    // 프롬프트 설정 확인
+    let hunt = wdb::get_prompt(PromptType::Hunt).ok().flatten();
+    let judge = wdb::get_prompt(PromptType::Judge).ok().flatten();
+    if hunt.is_none() || judge.is_none() {
+        let mut missing = Vec::new();
+        if hunt.is_none() { missing.push("hunt (사냥용)"); }
+        if judge.is_none() { missing.push("judge (처단용)"); }
+        return format!(
+            "⚠️ 프롬프트 미설정: {}\n\n\
+             /w prompt hunt set [내용]\n\
+             /w prompt judge set [내용]",
+            missing.join(", ")
+        );
+    }
+
+    // reqwest 클라이언트 생성 (Gemini 호출용, 한투 API Actor와 별도)
+    let client = reqwest::Client::new();
+
+    match pipeline::run_discovery_cycle(api, &client).await {
+        Ok(report) => format!("✅ 디스커버리 완료\n\n{}", report.summary()),
+        Err(e) => format!("❌ 디스커버리 실패\n{e:#}"),
+    }
+}
+
+fn cmd_watch_list() -> String {
+    use crate::watchlist::models::CandidateStatus;
+    let candidates = match wdb::list_candidates(Some(CandidateStatus::Judged)) {
+        Ok(c) => c,
+        Err(e) => return format!("조회 실패: {e:#}"),
+    };
+    if candidates.is_empty() {
+        return "평가된 종목이 없습니다. /w run 으로 디스커버리를 실행하세요.".to_string();
+    }
+    let mut msg = format!("⚖️ 평가 완료 ({})개\n", candidates.len());
+    for (i, c) in candidates.iter().enumerate().take(30) {
+        let score = c.score.map_or("-".to_string(), |s| format!("{s:.0}"));
+        let verdict = c.verdict.as_deref().unwrap_or("");
+        let verdict_short = if verdict.len() > 40 { &verdict[..40] } else { verdict };
+        msg.push_str(&format!(
+            "\n{}. {} ({}) [{score}점]\n   {verdict_short}",
+            i + 1, c.ticker, c.sector,
+        ));
+    }
+    msg
+}
+
+fn cmd_watch_pending() -> String {
+    use crate::watchlist::models::CandidateStatus;
+    let candidates = match wdb::list_candidates(Some(CandidateStatus::Pending)) {
+        Ok(c) => c,
+        Err(e) => return format!("조회 실패: {e:#}"),
+    };
+    if candidates.is_empty() {
+        return "대기 중인 후보가 없습니다.".to_string();
+    }
+    let mut msg = format!("🎯 대기 중 후보 ({}개)\n", candidates.len());
+    for (i, c) in candidates.iter().enumerate().take(50) {
+        msg.push_str(&format!(
+            "\n{}. {} — {} ({})",
+            i + 1, c.ticker, c.name, c.sector,
+        ));
+    }
+    msg
+}
+
+fn cmd_watch_info(ticker: &str) -> String {
+    if ticker.is_empty() {
+        return "사용법: /w info [TICKER]".to_string();
+    }
+    let candidate = match wdb::get_candidate_by_ticker(ticker) {
+        Ok(Some(c)) => c,
+        Ok(None) => return format!("{ticker} 을(를) 찾을 수 없습니다."),
+        Err(e) => return format!("조회 실패: {e:#}"),
+    };
+    let score = candidate.score.map_or("-".to_string(), |s| format!("{s:.0}"));
+    let verdict = candidate.verdict.as_deref().unwrap_or("-");
+    let status = candidate.status.as_str();
+    format!(
+        "🔍 {ticker}\n\
+         이름: {}\n\
+         섹터: {}\n\
+         상태: {status}\n\
+         점수: {score}\n\
+         판결: {verdict}\n\
+         사유: {}\n\
+         등록: {}",
+        candidate.name, candidate.sector, candidate.reason, candidate.created_at,
+    )
+}
+
+fn cmd_watch_blacklist(args: &str) -> String {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    match parts.first().copied() {
+        Some("add") | Some("a") => {
+            let ticker = match parts.get(1) {
+                Some(t) => t.to_uppercase(),
+                None => return "사용법: /w bl add [TICKER] [사유]".to_string(),
+            };
+            let reason = parts.get(2..).map(|p| p.join(" ")).unwrap_or_default();
+            match wdb::add_blacklist(&ticker, &reason) {
+                Ok(_) => format!("✅ {ticker} 블랙리스트 추가"),
+                Err(e) => format!("실패: {e:#}"),
+            }
+        }
+        Some("rm") | Some("remove") => {
+            let ticker = match parts.get(1) {
+                Some(t) => t.to_uppercase(),
+                None => return "사용법: /w bl rm [TICKER]".to_string(),
+            };
+            match wdb::remove_blacklist(&ticker) {
+                Ok(true) => format!("✅ {ticker} 블랙리스트 해제"),
+                Ok(false) => format!("{ticker} 은(는) 블랙리스트에 없습니다."),
+                Err(e) => format!("실패: {e:#}"),
+            }
+        }
+        _ => {
+            // 블랙리스트 목록 표시
+            let list = match wdb::list_blacklist() {
+                Ok(l) => l,
+                Err(e) => return format!("조회 실패: {e:#}"),
+            };
+            if list.is_empty() {
+                return "블랙리스트가 비어있습니다.".to_string();
+            }
+            let mut msg = format!("🚫 블랙리스트 ({}개)\n", list.len());
+            for b in &list {
+                msg.push_str(&format!("\n{} — {}", b.ticker, b.reason));
+            }
+            msg.push_str("\n\n/w bl add [TICKER] [사유]\n/w bl rm [TICKER]");
+            msg
+        }
+    }
+}
+
+fn cmd_watch_budget() -> String {
+    let today = match wdb::gemini_calls_today() {
+        Ok(n) => n,
+        Err(e) => return format!("조회 실패: {e:#}"),
+    };
+    let max = storage::with_config(|c| c.watchlist.max_gemini_calls_per_day);
+    format!("💰 오늘 Gemini 사용: {today} / {max}")
+}
+
+fn cmd_watch_prompt(args: &str) -> String {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    let prompt_type = match parts.first().copied() {
+        Some("hunt") => PromptType::Hunt,
+        Some("judge") => PromptType::Judge,
+        _ => return "사용법:\n/w prompt hunt show|set [내용]\n/w prompt judge show|set [내용]".to_string(),
+    };
+
+    let action = parts.get(1).copied().unwrap_or("show");
+
+    match action {
+        "show" => {
+            match wdb::get_prompt(prompt_type) {
+                Ok(Some(content)) => format!(
+                    "📝 {} 프롬프트:\n\n{}",
+                    prompt_type.as_str(), content
+                ),
+                Ok(None) => format!(
+                    "{} 프롬프트가 설정되지 않았습니다.\n/w prompt {} set [내용]",
+                    prompt_type.as_str(), prompt_type.as_str()
+                ),
+                Err(e) => format!("조회 실패: {e:#}"),
+            }
+        }
+        "set" => {
+            let content = parts.get(2..).map(|p| p.join(" ")).unwrap_or_default();
+            if content.is_empty() {
+                return format!("사용법: /w prompt {} set [프롬프트 내용]", prompt_type.as_str());
+            }
+            match wdb::set_prompt(prompt_type, &content) {
+                Ok(_) => format!("✅ {} 프롬프트 설정 완료", prompt_type.as_str()),
+                Err(e) => format!("저장 실패: {e:#}"),
+            }
+        }
+        _ => format!("사용법: /w prompt {} show|set [내용]", prompt_type.as_str()),
+    }
+}
+
+fn cmd_watch_history() -> String {
+    let records = match wdb::list_prompt_history(10) {
+        Ok(r) => r,
+        Err(e) => return format!("조회 실패: {e:#}"),
+    };
+    if records.is_empty() {
+        return "호출 이력이 없습니다.".to_string();
+    }
+    let mut msg = format!("📜 최근 Gemini 호출 이력 ({}건)\n", records.len());
+    for r in &records {
+        let tickers_short = if r.tickers_extracted.len() > 50 {
+            format!("{}...", &r.tickers_extracted[..50])
+        } else {
+            r.tickers_extracted.clone()
+        };
+        msg.push_str(&format!(
+            "\n#{} [{}] {} — {}\n   종목: {}",
+            r.id, r.prompt_type, r.status, r.created_at, tickers_short,
+        ));
+    }
+    msg
 }
 
 fn parse_condition(cond_type: &str, params: &[&str]) -> Result<Condition, String> {
