@@ -160,3 +160,65 @@ pub async fn run_discovery_cycle(
 
     Ok(report)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_detail_text() {
+        let detail = OverseasDetail {
+            name: "SoundHound AI".to_string(),
+            current_price: 4.52,
+            change_pct: 3.21,
+            market_cap: 1500000000.0,
+            per: 0.0,
+            pbr: 8.5,
+            eps: -0.32,
+            bps: 0.53,
+            shares: 250000000.0,
+            volume: 12500000.0,
+            volume_amount: 56250000.0,
+            high_52w: 10.25,
+            low_52w: 1.80,
+            sector: "Technology".to_string(),
+            prev_volume: 9800000.0,
+        };
+
+        let text = format_detail_for_gemini("SOUN", &detail);
+        assert!(text.contains("Ticker: SOUN"));
+        assert!(text.contains("Name: SoundHound AI"));
+        assert!(text.contains("Price: $4.52"));
+        assert!(text.contains("PBR: 8.5"));
+        assert!(text.contains("Sector: Technology"));
+        assert!(text.contains("52W High: $10.25, Low: $1.80"));
+    }
+
+    #[test]
+    fn cycle_report_summary() {
+        let report = CycleReport {
+            hunted: 30,
+            detailed: 28,
+            judged: 25,
+            errors: vec!["XYZ: 조회 실패".to_string()],
+        };
+        let summary = report.summary();
+        assert!(summary.contains("사냥: 30개"));
+        assert!(summary.contains("데이터 수집: 28개"));
+        assert!(summary.contains("처단: 25개"));
+        assert!(summary.contains("오류: 1건"));
+        assert!(summary.contains("XYZ: 조회 실패"));
+    }
+
+    #[test]
+    fn cycle_report_no_errors() {
+        let report = CycleReport {
+            hunted: 10,
+            detailed: 10,
+            judged: 10,
+            errors: Vec::new(),
+        };
+        let summary = report.summary();
+        assert!(!summary.contains("오류"));
+    }
+}

@@ -208,4 +208,105 @@ impl Config {
             .with_context(|| format!("Failed to write encrypted config: {path}"))?;
         Ok(())
     }
+
+    /// 메모리에서 암호화 → BootConfig (파일 저장 없이)
+    pub fn encrypt_to_boot(&self, passphrase: &str) -> Result<BootConfig> {
+        let secrets = self.extract_secrets();
+        let secrets_json = serde_json::to_string(&secrets)?;
+        let encrypted_b64 = crate::crypto::encrypt_to_base64(&secrets_json, passphrase)?;
+        Ok(BootConfig {
+            telegram: self.telegram.clone(),
+            scheduler: self.scheduler.clone(),
+            log: self.log.clone(),
+            encrypted_secrets: Some(encrypted_b64),
+            kis_api: None,
+            watchlist: None,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_test_config() -> Config {
+        Config {
+            kis_api: KisApiConfig {
+                app_key: "test_key_123".to_string(),
+                app_secret: "test_secret_456".to_string(),
+                base_url: "https://api.example.com".to_string(),
+                hts_id: "testid".to_string(),
+                token: None,
+            },
+            telegram: TelegramConfig {
+                bot_token: "123:ABC".to_string(),
+                owner_chat_id: 42,
+                users: vec![99],
+            },
+            scheduler: SchedulerConfig::default(),
+            log: LogConfig::default(),
+            watchlist: WatchlistConfig {
+                gemini_api_key: "gemini_key_789".to_string(),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn encrypt_decrypt_config_roundtrip() {
+        let config = make_test_config();
+        let passphrase = "my-secret-pass";
+
+        let boot = config.encrypt_to_boot(passphrase).unwrap();
+
+        // 암호화 모드 확인
+        assert!(boot.is_encrypted());
+        assert!(boot.kis_api.is_none());
+        assert!(boot.watchlist.is_none());
+        // 평문 부분 보존
+        assert_eq!(boot.telegram.bot_token, "123:ABC");
+        assert_eq!(boot.telegram.owner_chat_id, 42);
+
+        // 복호화
+        let restored = boot.decrypt_into_config(passphrase).unwrap();
+        assert_eq!(restored.kis_api.app_key, "test_key_123");
+        assert_eq!(restored.kis_api.app_secret, "test_secret_456");
+        assert_eq!(restored.watchlist.gemini_api_key, "gemini_key_789");
+        assert_eq!(restored.telegram.bot_token, "123:ABC");
+    }
+
+    #[test]
+    fn wrong_passphrase_fails_decryption() {
+        let config = make_test_config();
+        let boot = config.encrypt_to_boot("correct-pass").unwrap();
+        assert!(boot.decrypt_into_config("wrong-pass").is_err());
+    }
+
+    #[test]
+    fn plaintext_boot_compat() {
+        // 암호화 전 config.json 형태를 BootConfig로 파싱
+        let json = r#"{
+            "kis_api": { "app_key": "k", "app_secret": "s", "base_url": "u", "hts_id": "h" },
+            "telegram": { "bot_token": "t" },
+            "watchlist": { "gemini_api_key": "g" }
+        }"#;
+        let boot: BootConfig = serde_json::from_str(json).unwrap();
+        assert!(!boot.is_encrypted());
+
+        let config = boot.into_plaintext_config().unwrap();
+        assert_eq!(config.kis_api.app_key, "k");
+        assert_eq!(config.watchlist.gemini_api_key, "g");
+    }
+
+    #[test]
+    fn encrypted_secrets_not_contain_plaintext_keys() {
+        let config = make_test_config();
+        let boot = config.encrypt_to_boot("pass123").unwrap();
+
+        // encrypted_secrets blob에 평문 키가 직접 포함되지 않아야 함
+        let blob = boot.encrypted_secrets.as_ref().unwrap();
+        assert!(!blob.contains("test_key_123"));
+        assert!(!blob.contains("test_secret_456"));
+        assert!(!blob.contains("gemini_key_789"));
+    }
 }

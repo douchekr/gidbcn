@@ -240,4 +240,58 @@ mod tests {
         let input = "I can't find any stocks right now.";
         assert!(extract_json_array(input).is_err());
     }
+
+    #[test]
+    fn extract_multiple_hunt_results() {
+        let input = r#"[
+            {"ticker":"SOUN","name":"SoundHound AI","sector":"AI","reason":"voice AI platform"},
+            {"ticker":"GEVO","name":"Gevo Inc","sector":"Clean Energy","reason":"renewable fuel"},
+            {"ticker":"BKSY","name":"BlackSky","sector":"Space","reason":"satellite imagery"}
+        ]"#;
+        let arr = extract_json_array(input).unwrap();
+        let results: Vec<HuntResult> = serde_json::from_value(arr).unwrap();
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].ticker, "SOUN");
+        assert_eq!(results[2].sector, "Space");
+    }
+
+    #[test]
+    fn extract_judge_results_with_scores() {
+        let input = r#"```json
+        [
+            {"ticker":"SOUN","score":78,"verdict":"promising AI play, good revenue growth"},
+            {"ticker":"GEVO","score":42,"verdict":"high risk, pre-revenue"},
+            {"ticker":"BKSY","score":65,"verdict":"niche market, government contracts"}
+        ]
+        ```"#;
+        let arr = extract_json_array(input).unwrap();
+        let results: Vec<JudgeResult> = serde_json::from_value(arr).unwrap();
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].score, 78.0);
+        assert_eq!(results[1].score, 42.0);
+        assert!(results[1].verdict.contains("pre-revenue"));
+    }
+
+    #[test]
+    fn hunt_result_missing_optional_fields() {
+        // Gemini가 일부 필드를 빠뜨린 경우 default로 처리
+        let input = r#"[{"ticker":"XYZ"}]"#;
+        let arr = extract_json_array(input).unwrap();
+        let results: Vec<HuntResult> = serde_json::from_value(arr).unwrap();
+        assert_eq!(results[0].ticker, "XYZ");
+        assert_eq!(results[0].name, "");
+        assert_eq!(results[0].sector, "");
+    }
+
+    #[test]
+    fn extract_json_nested_in_text() {
+        // Gemini가 설명 텍스트를 앞뒤로 붙인 경우
+        let input = "Based on your criteria, here are my recommendations:\n\n\
+                     [{\"ticker\":\"ABC\",\"score\":88,\"verdict\":\"strong\"}]\n\n\
+                     Note: These are not financial advice.";
+        let arr = extract_json_array(input).unwrap();
+        let results: Vec<JudgeResult> = serde_json::from_value(arr).unwrap();
+        assert_eq!(results[0].ticker, "ABC");
+        assert_eq!(results[0].score, 88.0);
+    }
 }
