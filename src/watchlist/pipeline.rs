@@ -119,7 +119,9 @@ pub async fn run_discovery_cycle(
             }
             Err(e) => {
                 let msg = format!("{}: {e}", candidate.ticker);
-                tracing::warn!("데이터 수집 실패: {msg}");
+                tracing::warn!("데이터 수집 실패 → 블랙리스트: {msg}");
+                let _ = db::add_blacklist(&candidate.ticker, "한투 API 조회 실패 (자동)");
+                let _ = db::update_candidate_status(candidate.id, CandidateStatus::Blacklisted);
                 report.errors.push(msg);
             }
         }

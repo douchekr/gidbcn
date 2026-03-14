@@ -191,7 +191,6 @@ pub fn update_candidate_judge(id: i64, score: f64, verdict: &str) -> Result<()> 
     })
 }
 
-#[allow(dead_code)]
 pub fn update_candidate_status(id: i64, status: CandidateStatus) -> Result<()> {
     with_db(|conn| {
         conn.execute(
