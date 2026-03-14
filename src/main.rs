@@ -12,8 +12,17 @@ use tokio::sync::mpsc;
 use crate::api::{run_api_actor, ApiHandle};
 use crate::models::messages::ApiRequest;
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() {
+fn main() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime 생성 실패");
+
+    let local = tokio::task::LocalSet::new();
+    local.block_on(&rt, async_main());
+}
+
+async fn async_main() {
     // 1. config 로드 (로깅 초기화 전 — 오류는 eprintln 사용)
     let config_path = storage::CONFIG_PATH;
     let config = match config::Config::load(config_path) {
@@ -109,13 +118,13 @@ async fn main() {
     // 5. API Actor 채널 생성 + spawn
     let (api_tx, api_rx) = mpsc::channel::<ApiRequest>(32);
     let api_handle = ApiHandle::new(api_tx);
-    tokio::spawn(run_api_actor(api_rx));
+    tokio::task::spawn_local(run_api_actor(api_rx));
 
     // 6. 텔레그램 봇 + 스케줄러 spawn
     let bot_token = storage::with_config(|c| c.telegram.bot_token.clone());
     let tg_bot = Bot::new(&bot_token);
 
-    tokio::spawn(scheduler::run_scheduler(
+    tokio::task::spawn_local(scheduler::run_scheduler(
         api_handle.clone(),
         tg_bot.clone(),
     ));

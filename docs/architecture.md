@@ -39,13 +39,14 @@
 ## main.rs 초기화 흐름
 
 ```
+0. 수동 런타임 생성 (new_current_thread) + LocalSet::block_on()
 1. Config::load() — 파일 없으면 템플릿 생성 후 종료
 2. log 섹션 마이그레이션 — 누락 시 defaults 포함 자동 저장
 3. 필수 설정 검증 (bot_token, app_key, app_secret, hts_id)
 4. 로깅 초기화 (stdout: RUST_LOG, 파일: WARN 이상)
 5. storage::init_config(config) — Config 인메모리 싱글턴 적재
-6. API Actor 채널 생성 (mpsc, buffer=32) + tokio::spawn
-7. 스케줄러 spawn (api_handle + tg_bot)
+6. API Actor 채널 생성 (mpsc, buffer=32) + spawn_local
+7. 스케줄러 spawn_local (api_handle + tg_bot)
 8. 텔레그램 봇 실행 (메인 태스크, block)
 ```
 
