@@ -235,13 +235,49 @@ pub async fn run_api_actor(mut rx: mpsc::Receiver<ApiRequest>) {
 }
 ```
 
-### stale connection 재시도 (`send_with_retry`)
+### 통신 복원력 (3중 방어)
 
-HTTP keep-alive 연결을 서버가 종료한 뒤 클라이언트가 재사용 시도 시 발생하는 오류 처리:
+실 운영 중 발생한 "connection closed before message completed" 오류 대응으로 단계적 방어 구축.
 
-- 연결 오류(`is_request` / `is_connect`)에 한해 1회 재시도
-- 타임아웃(`is_timeout`)은 재시도하지 않음 (대기 시간 2배 방지)
-- `pool_idle_timeout(55s)` 1차 방어 + `send_with_retry` 2차 방어
+**경위**: 한투 API 서버가 idle connection을 ~60초에 끊는데, reqwest의 keep-alive 풀이 stale connection을 재사용하며 오류 발생. 두 차례 보강으로 해결.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 1차 방어: pool_idle_timeout(55s)                             │
+│   서버 idle timeout(~60s)보다 짧게 설정하여 stale connection  │
+│   사전 제거. 대부분의 오류가 여기서 차단됨.                     │
+│                                                              │
+│ 2차 방어: send_with_retry (ActorContext)                      │
+│   그래도 빠진 stale connection → 1회 재시도.                   │
+│   - is_request / is_connect 오류만 재시도                     │
+│   - is_timeout은 재시도 안 함 (대기 시간 2배 방지)             │
+│   - try_clone()으로 요청 복제 → 실패 시 원본 에러 반환         │
+│                                                              │
+│ 3차 방어: 시그널 엔진 주기적 재시도                             │
+│   개별 종목 시세 조회 실패 → 에러 로그 + 스킵.                 │
+│   다음 스케줄러 주기(5분)에 자동 재시도.                       │
+│   텔레그램 전송 실패 → active 유지 → 다음 주기에 재전송.       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**텔레그램 봇 복원력** (teloxide 내장):
+- long-polling (`getUpdates`) 기반 — 서버 push 아닌 클라이언트 pull
+- 네트워크 단절 → teloxide 내부에서 exponential backoff 재시도
+- 복구 시 `getUpdates`의 offset 기반으로 누락 없이 이어감
+- `enable_ctrlc_handler()` 외에는 종료 조건 없음 → Ctrl+C 전까지 무한 복구
+
+**에러 로깅 개선**:
+- 모든 에러 출력: `{e}` → `{e:#}` (anyhow 에러 체인 전체 출력)
+- HTTP 응답 body 포함 로깅 → 원인 추적 용이
+- API Actor 내부에서 토큰 갱신 실패도 로그 (서비스 중단 없이 다음 요청에서 재시도)
+
+**reqwest 클라이언트 설정** (ActorContext):
+| 설정 | 값 | 이유 |
+|------|-----|------|
+| `connect_timeout` | 5초 | TCP+TLS 연결 수립 |
+| `timeout` | 15초 | 전체 요청 (연결~응답 수신) |
+| `pool_idle_timeout` | 55초 | stale connection 1차 방어 |
+| TLS | rustls | OpenSSL 무의존 |
 
 ### current_thread에서의 동작
 

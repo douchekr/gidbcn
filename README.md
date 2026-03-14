@@ -464,6 +464,22 @@ uuid = { version = "1", features = ["v4"] }
 
 ---
 
+## 통신 복원력
+
+3중 방어 구조로 API 통신 안정성 확보:
+
+| 방어 단계 | 메커니즘 | 대상 |
+|-----------|----------|------|
+| 1차 | `pool_idle_timeout(55s)` — stale connection 사전 제거 | 한투 API |
+| 2차 | `send_with_retry` — 연결 오류 시 1회 재시도 (타임아웃 제외) | 한투 API |
+| 3차 | 스케줄러 주기적 재시도 — 실패 시 다음 5분 주기에 자동 재시도 | 시그널 엔진 |
+
+텔레그램 봇은 teloxide 내장 long-polling 복원력으로 네트워크 단절 시 자동 재연결.
+
+상세: [docs/architecture.md](docs/architecture.md) → "통신 복원력 (3중 방어)"
+
+---
+
 ## 코딩 규칙
 
 1. **Mutex/RwLock/Arc<Mutex<T>> 절대 사용 금지**. Actor 패턴 + 채널로만 통신.
