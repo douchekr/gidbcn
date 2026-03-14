@@ -1285,7 +1285,7 @@ async fn cmd_watchlist(
             if hunt.is_none() || judge.is_none() {
                 let mut missing = Vec::new();
                 if hunt.is_none() { missing.push("hunt (사냥용)"); }
-                if judge.is_none() { missing.push("judge (처단용)"); }
+                if judge.is_none() { missing.push("judge (평가용)"); }
                 return format!(
                     "⚠️ 프롬프트 미설정: {}\n\n\
                      /w prompt hunt set [내용]\n\

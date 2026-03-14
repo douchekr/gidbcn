@@ -168,14 +168,14 @@ pub async fn hunt(client: &reqwest::Client) -> Result<Vec<HuntResult>> {
     Ok(saved)
 }
 
-/// 처단: 한투 데이터 기반으로 Gemini에게 평가 요청
+/// 평가: 한투 데이터 기반으로 Gemini에게 평가 요청 (기준 미달 → 처단)
 pub async fn judge(
     client: &reqwest::Client,
     data_text: &str,
 ) -> Result<Vec<JudgeResult>> {
     // 프롬프트 확인
     let judge_prompt = db::get_prompt(PromptType::Judge)?
-        .context("처단 프롬프트가 설정되지 않았습니다. /w prompt judge set 으로 설정하세요")?;
+        .context("평가(judge) 프롬프트가 설정되지 않았습니다. /w prompt judge set 으로 설정하세요")?;
 
     // 일일 호출 제한 체크
     let max_calls = storage::with_config(|c| c.watchlist.max_gemini_calls_per_day);
@@ -215,7 +215,7 @@ pub async fn judge(
             let _ = db::insert_prompt_history(
                 PromptType::Judge, &full_prompt, &response_text, &model, "", "parse_error",
             );
-            bail!("처단 결과 파싱 실패: {e}");
+            bail!("평가 결과 파싱 실패: {e}");
         }
     }
 
@@ -223,7 +223,7 @@ pub async fn judge(
         PromptType::Judge, &full_prompt, &response_text, &model, &tickers_str, "success",
     );
 
-    tracing::info!("처단 완료: {}개 종목 평가", results.len());
+    tracing::info!("평가 완료: {}개 종목", results.len());
 
     Ok(results)
 }

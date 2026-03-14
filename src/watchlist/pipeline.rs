@@ -78,7 +78,7 @@ async fn fetch_detail(api: &ApiHandle, ticker: &str) -> Result<OverseasDetail> {
 ///
 /// 1. 사냥: Gemini → 후보 목록
 /// 2. 데이터 수집: 한투 API → 종목 상세
-/// 3. 처단: Gemini + 실데이터 → 점수/판결
+/// 3. 평가: Gemini + 실데이터 → 점수/판결 → 기준 미달 처단(BL)
 /// 4. DB 업데이트
 pub async fn run_discovery_cycle(
     api: &ApiHandle,
@@ -135,12 +135,12 @@ pub async fn run_discovery_cycle(
         return Ok(report);
     }
 
-    // 3. 처단: 수집한 데이터를 Gemini에게 평가 요청
+    // 3. 평가: 수집한 데이터를 Gemini에게 평가 요청
     let combined_data = detail_texts.join("\n---\n");
     let judge_results = match gemini::judge(http_client, &combined_data).await {
         Ok(r) => r,
         Err(e) => {
-            report.errors.push(format!("처단 실패: {e}"));
+            report.errors.push(format!("평가 실패: {e}"));
             return Ok(report);
         }
     };

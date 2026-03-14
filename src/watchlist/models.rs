@@ -78,7 +78,7 @@ pub struct HuntResult {
     pub reason: String,
 }
 
-/// Gemini 처단 결과 (JSON 파싱용)
+/// Gemini 평가 결과 (JSON 파싱용)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JudgeResult {
     pub ticker: String,
