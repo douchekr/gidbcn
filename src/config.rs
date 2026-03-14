@@ -100,7 +100,7 @@ impl Default for WatchlistConfig {
 fn default_gemini_model() -> String { "gemini-2.5-flash".to_string() }
 fn default_max_gemini_calls() -> usize { 250 }
 fn default_candidate_count() -> usize { 30 }
-fn default_discovery_interval() -> u64 { 8 }
+fn default_discovery_interval() -> u64 { 1 }
 
 /// 암호화 대상 민감 설정
 #[derive(Debug, Clone, Serialize, Deserialize)]
