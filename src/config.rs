@@ -28,6 +28,8 @@ pub struct Secrets {
     #[serde(default)]
     pub kis_expires_at: Option<DateTime<FixedOffset>>,
     pub gemini_api_key: String,
+    #[serde(default)]
+    pub tavily_api_key: String,
 }
 
 fn default_kis_base_url() -> String {
@@ -96,8 +98,10 @@ impl Default for LogConfig {
 pub struct WatchlistConfig {
     #[serde(default = "default_gemini_model")]
     pub gemini_model: String,
-    #[serde(default = "default_max_gemini_calls")]
-    pub max_gemini_calls_per_day: usize,
+    #[serde(default = "default_max_hunt_calls")]
+    pub max_hunt_calls_per_day: usize,
+    #[serde(default = "default_max_judge_calls")]
+    pub max_judge_calls_per_day: usize,
     #[serde(default = "default_candidate_count")]
     pub candidate_count: usize,
     #[serde(default = "default_hunt_interval")]
@@ -106,27 +110,41 @@ pub struct WatchlistConfig {
     pub min_score: f64,
     #[serde(default = "default_retention_days")]
     pub retention_days: u32,
+    #[serde(default = "default_gemma_model")]
+    pub gemma_model: String,
+    #[serde(default = "default_hunt_model")]
+    pub hunt_model: String,
+    #[serde(default = "default_max_survivors")]
+    pub max_survivors: usize,
 }
 
 impl Default for WatchlistConfig {
     fn default() -> Self {
         Self {
             gemini_model: default_gemini_model(),
-            max_gemini_calls_per_day: default_max_gemini_calls(),
+            max_hunt_calls_per_day: default_max_hunt_calls(),
+            max_judge_calls_per_day: default_max_judge_calls(),
             candidate_count: default_candidate_count(),
             hunt_interval_minutes: default_hunt_interval(),
             min_score: default_min_score(),
             retention_days: default_retention_days(),
+            gemma_model: default_gemma_model(),
+            hunt_model: default_hunt_model(),
+            max_survivors: default_max_survivors(),
         }
     }
 }
 
 fn default_gemini_model() -> String { "gemini-2.5-flash".to_string() }
-fn default_max_gemini_calls() -> usize { 250 }
+fn default_max_hunt_calls() -> usize { 20 }
+fn default_max_judge_calls() -> usize { 14400 }
 fn default_candidate_count() -> usize { 30 }
 fn default_hunt_interval() -> u64 { 30 }
 fn default_min_score() -> f64 { 60.0 }
 fn default_retention_days() -> u32 { 100 }
+fn default_gemma_model() -> String { "gemma-3-27b-it".to_string() }
+fn default_hunt_model() -> String { "gemini-2.5-flash-lite".to_string() }
+fn default_max_survivors() -> usize { 50 }
 
 // --- 디스크 포맷: BootConfig ---
 // secrets 필드가 object면 평문, string이면 암호화
@@ -281,8 +299,9 @@ impl Config {
     /// 암호화 저장: secrets → encrypted string
     pub fn save_encrypted(&self, path: &str, passphrase: &str) -> Result<()> {
         tracing::debug!(
-            "save_encrypted: gemini_api_key={}, kis_app_key={}",
+            "save_encrypted: gemini_api_key={}, tavily_api_key={}, kis_app_key={}",
             if self.secrets.gemini_api_key.is_empty() { "EMPTY" } else { "SET" },
+            if self.secrets.tavily_api_key.is_empty() { "EMPTY" } else { "SET" },
             if self.secrets.kis_app_key.is_empty() { "EMPTY" } else { "SET" },
         );
         let secrets_json = serde_json::to_string(&self.secrets)?;
@@ -348,6 +367,7 @@ mod tests {
                     &FixedOffset::east_opt(9 * 3600).unwrap(),
                 )),
                 gemini_api_key: "gemini_key_789".to_string(),
+                tavily_api_key: String::new(),
             },
         }
     }

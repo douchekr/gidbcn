@@ -397,7 +397,11 @@ retention_days(기본 100일) 초과 데이터 사이클 시작 시 자동 정�
 | 키 | 기본값 | 설명 |
 |---|---|---|
 | `gemini_model` | gemini-2.5-flash | Gemini 모델 |
-| `max_gemini_calls_per_day` | 250 | 일일 Gemini 호출 한도 |
+| `hunt_model` | gemini-2.5-flash-lite | 사냥 모델 |
+| `gemma_model` | gemma-3-27b-it | 평가 모델 |
+| `max_hunt_calls_per_day` | 20 | 일일 사냥(Flash Lite) 호출 한도 |
+| `max_judge_calls_per_day` | 14400 | 일일 평가(Gemma) 호출 한도 |
+| `max_survivors` | 50 | 도태 후 생존 상한 |
 | `candidate_count` | 30 | 사냥당 후보 수 |
 | `hunt_interval_minutes` | 30 | 사냥 주기 (분) |
 | `min_score` | 60.0 | 처단 기준 점수 |

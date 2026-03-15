@@ -104,8 +104,9 @@ pub fn init_db() -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_signals_active ON signals(active);",
     )?;
 
-    // 기존 DB 마이그레이션: detail_text 컬럼 추가
+    // 기존 DB 마이그레이션
     let _ = conn.execute("ALTER TABLE candidates ADD COLUMN detail_text TEXT NOT NULL DEFAULT ''", []);
+    let _ = conn.execute("ALTER TABLE candidates ADD COLUMN market TEXT NOT NULL DEFAULT ''", []);
 
     DB_CONN.with(|c| *c.borrow_mut() = Some(conn));
     tracing::info!("watchlist DB initialized: {DB_PATH}");
@@ -132,6 +133,7 @@ where
 
 pub fn insert_candidate(
     ticker: &str,
+    market: &str,
     name: &str,
     sector: &str,
     reason: &str,
@@ -140,9 +142,9 @@ pub fn insert_candidate(
     with_db(|conn| {
         let now = now_iso();
         conn.execute(
-            "INSERT INTO candidates (ticker, name, sector, reason, prompt_id, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![ticker, name, sector, reason, prompt_id, now],
+            "INSERT INTO candidates (ticker, market, name, sector, reason, prompt_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![ticker, market, name, sector, reason, prompt_id, now],
         )?;
         Ok(conn.last_insert_rowid())
     })
@@ -152,12 +154,12 @@ pub fn list_candidates(status: Option<CandidateStatus>) -> Result<Vec<Candidate>
     with_db(|conn| {
         let (sql, param): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match status {
             Some(s) => (
-                "SELECT id, ticker, name, sector, reason, score, verdict, status, prompt_id, created_at, judged_at, detail_text
+                "SELECT id, ticker, market, name, sector, reason, score, verdict, status, prompt_id, created_at, judged_at, detail_text
                  FROM candidates WHERE status = ?1 ORDER BY score DESC, id DESC",
                 vec![Box::new(s.as_str().to_string())],
             ),
             None => (
-                "SELECT id, ticker, name, sector, reason, score, verdict, status, prompt_id, created_at, judged_at, detail_text
+                "SELECT id, ticker, market, name, sector, reason, score, verdict, status, prompt_id, created_at, judged_at, detail_text
                  FROM candidates ORDER BY score DESC, id DESC",
                 vec![],
             ),
@@ -168,16 +170,17 @@ pub fn list_candidates(status: Option<CandidateStatus>) -> Result<Vec<Candidate>
             Ok(Candidate {
                 id: row.get(0)?,
                 ticker: row.get(1)?,
-                name: row.get(2)?,
-                sector: row.get(3)?,
-                reason: row.get(4)?,
-                score: row.get(5)?,
-                verdict: row.get(6)?,
-                status: CandidateStatus::from_str(&row.get::<_, String>(7)?),
-                prompt_id: row.get(8)?,
-                created_at: row.get(9)?,
-                judged_at: row.get(10)?,
-                detail_text: row.get(11)?,
+                market: row.get(2)?,
+                name: row.get(3)?,
+                sector: row.get(4)?,
+                reason: row.get(5)?,
+                score: row.get(6)?,
+                verdict: row.get(7)?,
+                status: CandidateStatus::from_str(&row.get::<_, String>(8)?),
+                prompt_id: row.get(9)?,
+                created_at: row.get(10)?,
+                judged_at: row.get(11)?,
+                detail_text: row.get(12)?,
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
@@ -219,23 +222,24 @@ pub fn update_candidate_status(id: i64, status: CandidateStatus) -> Result<()> {
 pub fn get_candidate_by_ticker(ticker: &str) -> Result<Option<Candidate>> {
     with_db(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT id, ticker, name, sector, reason, score, verdict, status, prompt_id, created_at, judged_at, detail_text
+            "SELECT id, ticker, market, name, sector, reason, score, verdict, status, prompt_id, created_at, judged_at, detail_text
              FROM candidates WHERE ticker = ?1 ORDER BY id DESC LIMIT 1",
         )?;
         let mut rows = stmt.query_map(params![ticker], |row| {
             Ok(Candidate {
                 id: row.get(0)?,
                 ticker: row.get(1)?,
-                name: row.get(2)?,
-                sector: row.get(3)?,
-                reason: row.get(4)?,
-                score: row.get(5)?,
-                verdict: row.get(6)?,
-                status: CandidateStatus::from_str(&row.get::<_, String>(7)?),
-                prompt_id: row.get(8)?,
-                created_at: row.get(9)?,
-                judged_at: row.get(10)?,
-                detail_text: row.get(11)?,
+                market: row.get(2)?,
+                name: row.get(3)?,
+                sector: row.get(4)?,
+                reason: row.get(5)?,
+                score: row.get(6)?,
+                verdict: row.get(7)?,
+                status: CandidateStatus::from_str(&row.get::<_, String>(8)?),
+                prompt_id: row.get(9)?,
+                created_at: row.get(10)?,
+                judged_at: row.get(11)?,
+                detail_text: row.get(12)?,
             })
         })?;
         Ok(rows.next().and_then(|r| r.ok()))
@@ -366,11 +370,23 @@ pub fn log_api_call(api_name: &str, endpoint: &str, success: bool) -> Result<()>
     })
 }
 
-pub fn gemini_calls_today() -> Result<usize> {
+pub fn hunt_calls_today() -> Result<usize> {
     with_db(|conn| {
         let today = today_prefix();
         let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM api_usage WHERE api_name = 'gemini' AND called_at LIKE ?1",
+            "SELECT COUNT(*) FROM api_usage WHERE api_name = 'gemini' AND endpoint = 'hunt' AND called_at LIKE ?1",
+            params![format!("{today}%")],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    })
+}
+
+pub fn judge_calls_today() -> Result<usize> {
+    with_db(|conn| {
+        let today = today_prefix();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM api_usage WHERE api_name = 'gemini' AND endpoint = 'judge' AND called_at LIKE ?1",
             params![format!("{today}%")],
             |row| row.get(0),
         )?;
@@ -393,6 +409,74 @@ pub fn clear_candidates_by_status(status: CandidateStatus) -> Result<usize> {
 pub fn clear_all_blacklist() -> Result<usize> {
     with_db(|conn| {
         let n = conn.execute("DELETE FROM blacklist", [])?;
+        Ok(n)
+    })
+}
+
+// --- 재평가 ---
+
+/// judged 중 점수 상위 max_survivors 외 나머지를 블랙리스트 처단
+pub fn cull_excess_judged(max_survivors: usize) -> Result<usize> {
+    with_db(|conn| {
+        // 상위 N개의 id 목록
+        let mut stmt = conn.prepare(
+            "SELECT id FROM candidates WHERE status = 'judged' ORDER BY score DESC LIMIT ?1",
+        )?;
+        let keep_ids: Vec<i64> = stmt
+            .query_map(params![max_survivors as i64], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        if keep_ids.is_empty() {
+            return Ok(0);
+        }
+
+        // 처단 대상: judged인데 keep_ids에 없는 것
+        let placeholders = keep_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT id, ticker, score FROM candidates WHERE status = 'judged' AND id NOT IN ({placeholders})"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+
+        let params_ref: Vec<Box<dyn rusqlite::types::ToSql>> =
+            keep_ids.iter().map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>).collect();
+        let params_slice: Vec<&dyn rusqlite::types::ToSql> = params_ref.iter().map(|p| p.as_ref()).collect();
+
+        let victims: Vec<(i64, String, f64)> = stmt
+            .query_map(params_slice.as_slice(), |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get::<_, f64>(2).unwrap_or(0.0)))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        for (id, ticker, score) in &victims {
+            let reason = format!("도태: {:.0}점 (상위 {max_survivors}위 밖)", score);
+            conn.execute(
+                "INSERT OR REPLACE INTO blacklist (ticker, reason, added_at) VALUES (?1, ?2, ?3)",
+                params![ticker, reason, now],
+            )?;
+            conn.execute(
+                "UPDATE candidates SET status = 'blacklisted' WHERE id = ?1",
+                params![id],
+            )?;
+        }
+
+        let culled = victims.len();
+        if culled > 0 {
+            tracing::info!("도태: {culled}개 처단 (상위 {max_survivors}개 유지)");
+        }
+        Ok(culled)
+    })
+}
+
+/// judged 후보를 재평가 대상(collected)으로 리셋
+pub fn reset_judged_for_reeval() -> Result<usize> {
+    with_db(|conn| {
+        let n = conn.execute(
+            "UPDATE candidates SET status = 'pending', detail_text = '' WHERE status = 'judged'",
+            [],
+        )?;
         Ok(n)
     })
 }
@@ -698,6 +782,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS candidates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL,
+                market TEXT NOT NULL DEFAULT '',
                 name TEXT NOT NULL DEFAULT '', sector TEXT NOT NULL DEFAULT '',
                 reason TEXT NOT NULL DEFAULT '', score REAL, verdict TEXT,
                 status TEXT NOT NULL DEFAULT 'pending', prompt_id INTEGER,
@@ -757,7 +842,7 @@ mod tests {
     #[test]
     fn candidate_insert_and_judge() {
         setup_test_db();
-        let id = insert_candidate("AAPL", "Apple", "Tech", "solid fundamentals", None).unwrap();
+        let id = insert_candidate("AAPL", "NAS", "Apple", "Tech", "solid fundamentals", None).unwrap();
         let c = get_candidate_by_ticker("AAPL").unwrap().unwrap();
         assert_eq!(c.status, CandidateStatus::Pending);
         assert!(c.score.is_none());
@@ -780,12 +865,15 @@ mod tests {
     }
 
     #[test]
-    fn gemini_calls_count() {
+    fn hunt_judge_calls_count() {
         setup_test_db();
-        assert_eq!(gemini_calls_today().unwrap(), 0);
-        log_api_call("gemini", "generateContent", true).unwrap();
-        log_api_call("gemini", "generateContent", true).unwrap();
-        assert_eq!(gemini_calls_today().unwrap(), 2);
+        assert_eq!(hunt_calls_today().unwrap(), 0);
+        assert_eq!(judge_calls_today().unwrap(), 0);
+        log_api_call("gemini", "hunt", true).unwrap();
+        log_api_call("gemini", "hunt", true).unwrap();
+        log_api_call("gemini", "judge", true).unwrap();
+        assert_eq!(hunt_calls_today().unwrap(), 2);
+        assert_eq!(judge_calls_today().unwrap(), 1);
     }
 
     #[test]
@@ -885,6 +973,204 @@ mod tests {
             Condition::ProfitBelow { percentage } => assert_eq!(*percentage, -5.0),
             _ => panic!("wrong condition variant"),
         }
+    }
+
+    #[test]
+    fn candidate_market_stored() {
+        setup_test_db();
+        insert_candidate("SOUN", "NAS", "SoundHound", "AI", "voice platform", None).unwrap();
+        let c = get_candidate_by_ticker("SOUN").unwrap().unwrap();
+        assert_eq!(c.market, "NAS");
+        assert_eq!(c.ticker, "SOUN");
+        assert_eq!(c.name, "SoundHound");
+    }
+
+    #[test]
+    fn candidate_market_default_empty() {
+        setup_test_db();
+        insert_candidate("GEVO", "", "Gevo", "Energy", "renewable fuel", None).unwrap();
+        let c = get_candidate_by_ticker("GEVO").unwrap().unwrap();
+        assert_eq!(c.market, "");
+    }
+
+    #[test]
+    fn candidate_collected_status() {
+        setup_test_db();
+        let id = insert_candidate("TSLA", "NAS", "Tesla", "EV", "growth", None).unwrap();
+        update_candidate_collected(id, "Price: $8.50\nPER: 12").unwrap();
+        let c = get_candidate_by_ticker("TSLA").unwrap().unwrap();
+        assert_eq!(c.status, CandidateStatus::Collected);
+        assert!(c.detail_text.contains("Price: $8.50"));
+    }
+
+    #[test]
+    fn candidate_status_update() {
+        setup_test_db();
+        let id = insert_candidate("FAIL", "NYS", "FailCo", "Junk", "bad", None).unwrap();
+        update_candidate_status(id, CandidateStatus::Blacklisted).unwrap();
+        let c = get_candidate_by_ticker("FAIL").unwrap().unwrap();
+        assert_eq!(c.status, CandidateStatus::Blacklisted);
+    }
+
+    #[test]
+    fn candidate_not_found() {
+        setup_test_db();
+        assert!(get_candidate_by_ticker("NOPE").unwrap().is_none());
+    }
+
+    #[test]
+    fn list_candidates_by_status() {
+        setup_test_db();
+        insert_candidate("AAA", "NAS", "A Co", "Tech", "r1", None).unwrap();
+        let id2 = insert_candidate("BBB", "NYS", "B Co", "Fin", "r2", None).unwrap();
+        update_candidate_judge(id2, 90.0, "good").unwrap();
+
+        let pending = list_candidates(Some(CandidateStatus::Pending)).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].ticker, "AAA");
+
+        let judged = list_candidates(Some(CandidateStatus::Judged)).unwrap();
+        assert_eq!(judged.len(), 1);
+        assert_eq!(judged[0].ticker, "BBB");
+
+        let all = list_candidates(None).unwrap();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn hunt_judge_calls_isolated() {
+        setup_test_db();
+        log_api_call("gemini", "hunt", true).unwrap();
+        log_api_call("gemini", "judge", true).unwrap();
+        log_api_call("gemini", "judge", true).unwrap();
+        // hunt와 judge는 서로 격리
+        assert_eq!(hunt_calls_today().unwrap(), 1);
+        assert_eq!(judge_calls_today().unwrap(), 2);
+    }
+
+    #[test]
+    fn cull_excess_judged_keeps_top_n() {
+        setup_test_db();
+        // Insert 5 candidates, judge them with different scores
+        for (ticker, market, score) in &[
+            ("T1", "NAS", 90.0),
+            ("T2", "NAS", 80.0),
+            ("T3", "NYS", 70.0),
+            ("T4", "AMS", 60.0),
+            ("T5", "NAS", 50.0),
+        ] {
+            let id = insert_candidate(ticker, market, ticker, "Sec", "reason", None).unwrap();
+            update_candidate_judge(id, *score, "v").unwrap();
+        }
+
+        // Keep top 3
+        let culled = cull_excess_judged(3).unwrap();
+        assert_eq!(culled, 2); // T4(60) and T5(50) culled
+
+        // Verify survivors
+        let judged = list_candidates(Some(CandidateStatus::Judged)).unwrap();
+        assert_eq!(judged.len(), 3);
+        let tickers: Vec<&str> = judged.iter().map(|c| c.ticker.as_str()).collect();
+        assert!(tickers.contains(&"T1"));
+        assert!(tickers.contains(&"T2"));
+        assert!(tickers.contains(&"T3"));
+
+        // Verify culled are blacklisted
+        assert!(is_blacklisted("T4").unwrap());
+        assert!(is_blacklisted("T5").unwrap());
+    }
+
+    #[test]
+    fn cull_excess_judged_no_op_under_limit() {
+        setup_test_db();
+        let id = insert_candidate("SOLO", "NAS", "Solo", "Tech", "r", None).unwrap();
+        update_candidate_judge(id, 75.0, "ok").unwrap();
+
+        let culled = cull_excess_judged(50).unwrap();
+        assert_eq!(culled, 0);
+
+        let judged = list_candidates(Some(CandidateStatus::Judged)).unwrap();
+        assert_eq!(judged.len(), 1);
+    }
+
+    #[test]
+    fn cull_excess_judged_empty() {
+        setup_test_db();
+        let culled = cull_excess_judged(10).unwrap();
+        assert_eq!(culled, 0);
+    }
+
+    #[test]
+    fn reset_judged_for_reeval() {
+        setup_test_db();
+        let id1 = insert_candidate("RE1", "NAS", "Re1", "Tech", "r", None).unwrap();
+        let id2 = insert_candidate("RE2", "NYS", "Re2", "Fin", "r", None).unwrap();
+        let _id3 = insert_candidate("PE1", "AMS", "Pe1", "Bio", "r", None).unwrap();
+
+        update_candidate_judge(id1, 80.0, "good").unwrap();
+        update_candidate_judge(id2, 70.0, "ok").unwrap();
+        // id3 stays pending
+
+        let reset = super::reset_judged_for_reeval().unwrap();
+        assert_eq!(reset, 2);
+
+        // judged → pending with empty detail_text
+        let c1 = get_candidate_by_ticker("RE1").unwrap().unwrap();
+        assert_eq!(c1.status, CandidateStatus::Pending);
+        assert_eq!(c1.detail_text, "");
+
+        // pending stays pending
+        let c3 = get_candidate_by_ticker("PE1").unwrap().unwrap();
+        assert_eq!(c3.status, CandidateStatus::Pending);
+    }
+
+    #[test]
+    fn reset_judged_for_reeval_empty() {
+        setup_test_db();
+        let reset = super::reset_judged_for_reeval().unwrap();
+        assert_eq!(reset, 0);
+    }
+
+    #[test]
+    fn clear_candidates_by_status_works() {
+        setup_test_db();
+        insert_candidate("P1", "NAS", "P1", "T", "r", None).unwrap();
+        let id2 = insert_candidate("J1", "NYS", "J1", "T", "r", None).unwrap();
+        update_candidate_judge(id2, 80.0, "ok").unwrap();
+
+        let n = clear_candidates_by_status(CandidateStatus::Pending).unwrap();
+        assert_eq!(n, 1);
+
+        let all = list_candidates(None).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].ticker, "J1");
+    }
+
+    #[test]
+    fn prompt_history_insert_and_list() {
+        setup_test_db();
+        let id = insert_prompt_history(
+            PromptType::Hunt, "prompt text", "response text", "gemma-3-27b-it", "SOUN,GEVO", "success",
+        ).unwrap();
+        assert!(id > 0);
+
+        let history = list_prompt_history(10).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].prompt_type, "hunt");
+        assert_eq!(history[0].model, "gemma-3-27b-it");
+        assert_eq!(history[0].tickers_extracted, "SOUN,GEVO");
+    }
+
+    #[test]
+    fn api_usage_log_success_and_failure() {
+        setup_test_db();
+        log_api_call("gemini", "hunt", true).unwrap();
+        log_api_call("gemini", "hunt", false).unwrap();
+        log_api_call("gemini", "judge", true).unwrap();
+
+        // success와 failure 모두 카운트
+        assert_eq!(hunt_calls_today().unwrap(), 2);
+        assert_eq!(judge_calls_today().unwrap(), 1);
     }
 
     #[test]

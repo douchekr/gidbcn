@@ -1451,12 +1451,18 @@ fn cmd_watch_blacklist(args: &str) -> String {
 }
 
 fn cmd_watch_budget() -> String {
-    let today = match wdb::gemini_calls_today() {
+    let hunt = match wdb::hunt_calls_today() {
         Ok(n) => n,
         Err(e) => return format!("조회 실패: {e:#}"),
     };
-    let max = storage::with_config(|c| c.watchlist.max_gemini_calls_per_day);
-    format!("💰 오늘 Gemini 사용: {today} / {max}")
+    let judge = match wdb::judge_calls_today() {
+        Ok(n) => n,
+        Err(e) => return format!("조회 실패: {e:#}"),
+    };
+    let (max_hunt, max_judge) = storage::with_config(|c| {
+        (c.watchlist.max_hunt_calls_per_day, c.watchlist.max_judge_calls_per_day)
+    });
+    format!("💰 오늘 사냥: {hunt}/{max_hunt} | 평가: {judge}/{max_judge}")
 }
 
 fn cmd_watch_prompt(args: &str) -> String {

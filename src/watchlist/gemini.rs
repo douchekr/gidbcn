@@ -5,11 +5,9 @@ use super::db;
 use super::models::{HuntResult, JudgeResult, PromptType};
 use crate::storage;
 
-/// Gemini API raw 호출
-async fn call_gemini(client: &reqwest::Client, prompt: &str) -> Result<String> {
-    let (api_key, model) = storage::with_config(|c| {
-        (c.secrets.gemini_api_key.clone(), c.watchlist.gemini_model.clone())
-    });
+/// Google AI Studio LLM 호출 (Gemini / Gemma 공용)
+async fn call_llm(client: &reqwest::Client, model: &str, prompt: &str) -> Result<String> {
+    let api_key = storage::with_config(|c| c.secrets.gemini_api_key.clone());
 
     if api_key.is_empty() {
         bail!("secrets.gemini_api_key가 설정되지 않았습니다");
@@ -29,13 +27,13 @@ async fn call_gemini(client: &reqwest::Client, prompt: &str) -> Result<String> {
         .json(&body)
         .send()
         .await
-        .context("Gemini API 요청 실패")?;
+        .context("LLM API 요청 실패")?;
 
     let status = resp.status();
-    let text = resp.text().await.context("Gemini 응답 읽기 실패")?;
+    let text = resp.text().await.context("LLM 응답 읽기 실패")?;
 
     if !status.is_success() {
-        bail!("Gemini API 오류 ({status}): {text}");
+        bail!("LLM API 오류 ({status}): {text}");
     }
 
     extract_gemini_text(&text)
@@ -89,37 +87,37 @@ fn extract_json_array(text: &str) -> Result<Value> {
     serde_json::from_str(array_str).context("JSON 배열 파싱 실패")
 }
 
-/// 사냥: 프롬프트로 후보 종목 수집
+/// 사냥: Flash Lite로 직접 후보 종목 수집
 pub async fn hunt(client: &reqwest::Client) -> Result<Vec<HuntResult>> {
-    // 프롬프트 확인
     let hunt_prompt = db::get_prompt(PromptType::Hunt)?
         .context("사냥 프롬프트가 설정되지 않았습니다. /w prompt hunt set 으로 설정하세요")?;
 
-    // 일일 호출 제한 체크
-    let max_calls = storage::with_config(|c| c.watchlist.max_gemini_calls_per_day);
-    let today_calls = db::gemini_calls_today()?;
+    let (hunt_model, candidate_count) = storage::with_config(|c| {
+        (c.watchlist.hunt_model.clone(), c.watchlist.candidate_count)
+    });
+
+    // 일일 사냥 호출 제한 체크
+    let max_calls = storage::with_config(|c| c.watchlist.max_hunt_calls_per_day);
+    let today_calls = db::hunt_calls_today()?;
     if today_calls >= max_calls {
-        bail!("오늘 Gemini 호출 한도 초과 ({today_calls}/{max_calls})");
+        bail!("오늘 사냥 호출 한도 초과 ({today_calls}/{max_calls})");
     }
 
-    let candidate_count = storage::with_config(|c| c.watchlist.candidate_count);
-
-    // 블랙리스트 + 기존 후보 맥락 구성
+    // 블랙리스트
     let blacklist = db::list_blacklist()?;
     let bl_tickers: Vec<String> = blacklist.iter().map(|b| b.ticker.clone()).collect();
 
     let full_prompt = format!(
         "{hunt_prompt}\n\n\
-         Return exactly {candidate_count} tickers as a JSON array:\n\
-         [{{\"ticker\":\"XXX\",\"name\":\"...\",\"sector\":\"...\",\"reason\":\"...\"}}]\n\
+         Return exactly {candidate_count} items as a JSON array:\n\
+         [{{\"ticker\":\"XXX\",\"market\":\"NAS\",\"name\":\"...\",\"sector\":\"...\",\"reason\":\"...\"}}]\n\
+         market: NAS (NASDAQ), NYS (NYSE), AMS (AMEX).\n\
          No other text, no markdown.\n\n\
          Exclude these blacklisted tickers: {bl_list}",
         bl_list = if bl_tickers.is_empty() { "none".to_string() } else { bl_tickers.join(", ") },
     );
 
-    // Gemini 호출
-    let response = call_gemini(client, &full_prompt).await;
-    let model = storage::with_config(|c| c.watchlist.gemini_model.clone());
+    let response = call_llm(client, &hunt_model, &full_prompt).await;
 
     // API 사용 로그
     let _ = db::log_api_call("gemini", "hunt", response.is_ok());
@@ -137,9 +135,8 @@ pub async fn hunt(client: &reqwest::Client) -> Result<Vec<HuntResult>> {
             tickers_str = results.iter().map(|r| r.ticker.as_str()).collect::<Vec<_>>().join(",");
         }
         Err(e) => {
-            // 파싱 실패해도 이력은 저장
             let _ = db::insert_prompt_history(
-                PromptType::Hunt, &full_prompt, &response_text, &model, "", "parse_error",
+                PromptType::Hunt, &full_prompt, &response_text, &hunt_model, "", "parse_error",
             );
             bail!("사냥 결과 파싱 실패: {e}");
         }
@@ -147,7 +144,7 @@ pub async fn hunt(client: &reqwest::Client) -> Result<Vec<HuntResult>> {
 
     // 이력 저장
     let prompt_id = db::insert_prompt_history(
-        PromptType::Hunt, &full_prompt, &response_text, &model, &tickers_str, "success",
+        PromptType::Hunt, &full_prompt, &response_text, &hunt_model, &tickers_str, "success",
     )?;
 
     // 블랙리스트 필터링 + DB 저장
@@ -158,7 +155,7 @@ pub async fn hunt(client: &reqwest::Client) -> Result<Vec<HuntResult>> {
             tracing::info!("사냥 결과 블랙리스트 제외: {ticker}");
             continue;
         }
-        let _ = db::insert_candidate(&ticker, &r.name, &r.sector, &r.reason, Some(prompt_id));
+        let _ = db::insert_candidate(&ticker, &r.market, &r.name, &r.sector, &r.reason, Some(prompt_id));
         saved.push(r.clone());
     }
 
@@ -168,7 +165,7 @@ pub async fn hunt(client: &reqwest::Client) -> Result<Vec<HuntResult>> {
     Ok(saved)
 }
 
-/// 평가: 한투 데이터 기반으로 Gemini에게 평가 요청 (기준 미달 → 처단)
+/// 평가: 한투 데이터 기반으로 Gemma에게 평가 요청 (기준 미달 → 처단)
 pub async fn judge(
     client: &reqwest::Client,
     data_text: &str,
@@ -177,11 +174,13 @@ pub async fn judge(
     let judge_prompt = db::get_prompt(PromptType::Judge)?
         .context("평가(judge) 프롬프트가 설정되지 않았습니다. /w prompt judge set 으로 설정하세요")?;
 
-    // 일일 호출 제한 체크
-    let max_calls = storage::with_config(|c| c.watchlist.max_gemini_calls_per_day);
-    let today_calls = db::gemini_calls_today()?;
+    let gemma_model = storage::with_config(|c| c.watchlist.gemma_model.clone());
+
+    // 일일 평가 호출 제한 체크
+    let max_calls = storage::with_config(|c| c.watchlist.max_judge_calls_per_day);
+    let today_calls = db::judge_calls_today()?;
     if today_calls >= max_calls {
-        bail!("오늘 Gemini 호출 한도 초과 ({today_calls}/{max_calls})");
+        bail!("오늘 평가 호출 한도 초과 ({today_calls}/{max_calls})");
     }
 
     let full_prompt = format!(
@@ -194,9 +193,8 @@ pub async fn judge(
          No other text, no markdown."
     );
 
-    // Gemini 호출
-    let response = call_gemini(client, &full_prompt).await;
-    let model = storage::with_config(|c| c.watchlist.gemini_model.clone());
+    // Gemma 호출
+    let response = call_llm(client, &gemma_model, &full_prompt).await;
 
     let _ = db::log_api_call("gemini", "judge", response.is_ok());
 
@@ -213,14 +211,14 @@ pub async fn judge(
         }
         Err(e) => {
             let _ = db::insert_prompt_history(
-                PromptType::Judge, &full_prompt, &response_text, &model, "", "parse_error",
+                PromptType::Judge, &full_prompt, &response_text, &gemma_model, "", "parse_error",
             );
             bail!("평가 결과 파싱 실패: {e}");
         }
     }
 
     let _ = db::insert_prompt_history(
-        PromptType::Judge, &full_prompt, &response_text, &model, &tickers_str, "success",
+        PromptType::Judge, &full_prompt, &response_text, &gemma_model, &tickers_str, "success",
     );
 
     tracing::info!("평가 완료: {}개 종목", results.len());
@@ -297,13 +295,70 @@ mod tests {
 
     #[test]
     fn hunt_result_missing_optional_fields() {
-        // Gemini가 일부 필드를 빠뜨린 경우 default로 처리
+        // Gemma가 일부 필드를 빠뜨린 경우 default로 처리
         let input = r#"[{"ticker":"XYZ"}]"#;
         let arr = extract_json_array(input).unwrap();
         let results: Vec<HuntResult> = serde_json::from_value(arr).unwrap();
         assert_eq!(results[0].ticker, "XYZ");
         assert_eq!(results[0].name, "");
         assert_eq!(results[0].sector, "");
+        assert_eq!(results[0].market, "");
+    }
+
+    #[test]
+    fn hunt_result_with_market_field() {
+        let input = r#"[
+            {"ticker":"SOUN","market":"NAS","name":"SoundHound AI","sector":"AI","reason":"voice"},
+            {"ticker":"BLNK","market":"NYS","name":"Blink","sector":"EV","reason":"charging"},
+            {"ticker":"CBAK","market":"AMS","name":"CBAK Energy","sector":"Battery","reason":"cheap"}
+        ]"#;
+        let arr = extract_json_array(input).unwrap();
+        let results: Vec<HuntResult> = serde_json::from_value(arr).unwrap();
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].market, "NAS");
+        assert_eq!(results[1].market, "NYS");
+        assert_eq!(results[2].market, "AMS");
+    }
+
+    #[test]
+    fn extract_json_array_only_brackets() {
+        let input = r#"[]"#;
+        let arr = extract_json_array(input).unwrap();
+        let results: Vec<HuntResult> = serde_json::from_value(arr).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn extract_json_array_broken_json() {
+        let input = r#"[{"ticker":"AAA","score":}"#;
+        assert!(extract_json_array(input).is_err());
+    }
+
+    #[test]
+    fn extract_json_array_triple_backtick_no_lang() {
+        let input = "```\n[{\"ticker\":\"TEST\",\"score\":77,\"verdict\":\"ok\"}]\n```";
+        let arr = extract_json_array(input).unwrap();
+        let results: Vec<JudgeResult> = serde_json::from_value(arr).unwrap();
+        assert_eq!(results[0].ticker, "TEST");
+    }
+
+    #[test]
+    fn gemini_response_with_whitespace() {
+        let body = r#"{
+            "candidates": [{
+                "content": {"parts": [{"text": "  \n  hello  \n  "}], "role": "model"},
+                "finishReason": "STOP"
+            }]
+        }"#;
+        let text = extract_gemini_text(body).unwrap();
+        assert_eq!(text, "  \n  hello  \n  ");
+    }
+
+    #[test]
+    fn gemini_error_without_message() {
+        let body = r#"{"error": {"code": 500}}"#;
+        let err = extract_gemini_text(body).unwrap_err();
+        assert!(err.to_string().contains("500"));
     }
 
     #[test]

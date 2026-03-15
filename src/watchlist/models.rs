@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub struct Candidate {
     pub id: i64,
     pub ticker: String,
+    pub market: String,
     pub name: String,
     pub sector: String,
     pub reason: String,
@@ -70,10 +71,12 @@ pub struct PromptRecord {
     pub status: String,
 }
 
-/// Gemini 사냥 결과 (JSON 파싱용)
+/// 사냥 결과 (JSON 파싱용)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HuntResult {
     pub ticker: String,
+    #[serde(default)]
+    pub market: String,
     #[serde(default)]
     pub name: String,
     #[serde(default)]
@@ -113,5 +116,97 @@ impl PromptType {
             "judge" => Some(Self::Judge),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn candidate_status_roundtrip() {
+        for status in &[CandidateStatus::Pending, CandidateStatus::Collected,
+                        CandidateStatus::Judged, CandidateStatus::Blacklisted] {
+            let s = status.as_str();
+            let restored = CandidateStatus::from_str(s);
+            assert_eq!(*status, restored);
+        }
+    }
+
+    #[test]
+    fn candidate_status_unknown_defaults_pending() {
+        assert_eq!(CandidateStatus::from_str("garbage"), CandidateStatus::Pending);
+        assert_eq!(CandidateStatus::from_str(""), CandidateStatus::Pending);
+    }
+
+    #[test]
+    fn prompt_type_as_str() {
+        assert_eq!(PromptType::Hunt.as_str(), "hunt");
+        assert_eq!(PromptType::Judge.as_str(), "judge");
+    }
+
+    #[test]
+    fn prompt_type_from_str() {
+        assert_eq!(PromptType::from_str("hunt"), Some(PromptType::Hunt));
+        assert_eq!(PromptType::from_str("judge"), Some(PromptType::Judge));
+        assert_eq!(PromptType::from_str("unknown"), None);
+        assert_eq!(PromptType::from_str(""), None);
+    }
+
+    #[test]
+    fn hunt_result_with_market() {
+        let json = r#"{"ticker":"SOUN","market":"NAS","name":"SoundHound","sector":"AI","reason":"voice"}"#;
+        let r: HuntResult = serde_json::from_str(json).unwrap();
+        assert_eq!(r.ticker, "SOUN");
+        assert_eq!(r.market, "NAS");
+        assert_eq!(r.name, "SoundHound");
+    }
+
+    #[test]
+    fn hunt_result_without_market() {
+        let json = r#"{"ticker":"GEVO"}"#;
+        let r: HuntResult = serde_json::from_str(json).unwrap();
+        assert_eq!(r.ticker, "GEVO");
+        assert_eq!(r.market, "");
+        assert_eq!(r.name, "");
+    }
+
+    #[test]
+    fn hunt_result_serialize_roundtrip() {
+        let r = HuntResult {
+            ticker: "BLNK".to_string(),
+            market: "NAS".to_string(),
+            name: "Blink Charging".to_string(),
+            sector: "EV".to_string(),
+            reason: "charging infra".to_string(),
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        let restored: HuntResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.ticker, "BLNK");
+        assert_eq!(restored.market, "NAS");
+    }
+
+    #[test]
+    fn judge_result_parse() {
+        let json = r#"{"ticker":"SOUN","score":85.5,"verdict":"strong buy"}"#;
+        let r: JudgeResult = serde_json::from_str(json).unwrap();
+        assert_eq!(r.ticker, "SOUN");
+        assert_eq!(r.score, 85.5);
+        assert_eq!(r.verdict, "strong buy");
+    }
+
+    #[test]
+    fn judge_result_default_verdict() {
+        let json = r#"{"ticker":"X","score":50}"#;
+        let r: JudgeResult = serde_json::from_str(json).unwrap();
+        assert_eq!(r.verdict, "");
+    }
+
+    #[test]
+    fn candidate_status_serde() {
+        let json = serde_json::to_string(&CandidateStatus::Judged).unwrap();
+        assert_eq!(json, "\"judged\"");
+        let restored: CandidateStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, CandidateStatus::Judged);
     }
 }

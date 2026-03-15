@@ -13,7 +13,11 @@
   },
   "watchlist": {
     "gemini_model": "gemini-2.5-flash",
-    "max_gemini_calls_per_day": 250,
+    "hunt_model": "gemini-2.5-flash-lite",
+    "gemma_model": "gemma-3-27b-it",
+    "max_hunt_calls_per_day": 20,
+    "max_judge_calls_per_day": 14400,
+    "max_survivors": 50,
     "candidate_count": 30,
     "hunt_interval_minutes": 30,
     "min_score": 60.0,
