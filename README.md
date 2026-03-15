@@ -31,12 +31,13 @@
 │  │  • 명령어 처리          │         └─────────────┘ │
 │  │  • 시그널 엔진          │                         │
 │  │  • 스케줄러 (interval)  │  직접 호출 (sync)       │
-│  │  • JSON I/O 직접 처리   │◄──────► /opt/.../portfolio.json │
+│  │  • SQLite I/O (holdings/ │◄──────► /opt/.../portfolio.db  │
+│  │    signals 테이블)       │                                │
 │  └───────────────────────┘                          │
 └─────────────────────────────────────────────────────┘
 ```
 
-- **Bot Task**: teloxide 디스패처 + 명령어 처리 + 시그널 엔진 + 스케줄러 + JSON I/O
+- **Bot Task**: teloxide 디스패처 + 명령어 처리 + 시그널 엔진 + 스케줄러 + SQLite I/O
 - **API Actor**: reqwest::Client, access_token, rate limiter 독점 소유. mpsc로 요청 수신, oneshot으로 응답 반환
 
 ### Actor 간 통신
@@ -108,7 +109,7 @@ gidbcn/
     │   ├── mod.rs
     │   ├── engine.rs      ← 시그널 조건 평가 엔진
     │   └── price.rs       ← price_above/below, profit_above/below
-    ├── storage.rs         ← portfolio/signals JSON CRUD (동기)
+    ├── storage.rs         ← portfolio/signals SQLite CRUD (watchlist/db.rs 위임)
     ├── scheduler.rs       ← tokio::time::interval 기반
     └── models/
         ├── mod.rs
@@ -120,8 +121,8 @@ gidbcn/
 
 **데이터 파일 경로** (레포 외부): `/opt/kkuepark/gidbcn/`
 - `config.json` — API 키, 토큰, 허용 사용자 목록 (gitignore)
-- `portfolio.json` — 전체 사용자 포트폴리오 (user_id 키 통합)
-- `signals.json` — 전체 사용자 시그널 (user_id 키 통합)
+- `portfolio.db` — SQLite (WAL 모드): 포트폴리오(holdings), 시그널(signals), 워치리스트(candidates, blacklist 등)
+- `portfolio.json` / `signals.json` — 레거시. 최초 기동 시 SQLite로 자동 마이그레이션 (삭제 안 함, 백업용 보존)
 
 ---
 
@@ -141,7 +142,7 @@ async fn main() {
 
     // 3. 로깅 초기화 (config.log 기준)
     //    - stdout: RUST_LOG 환경변수 기준
-    //    - 파일: config.log.dir/gidbcn.YYYY-MM-DD.log, WARN 이상만, config.log.retain_days일 보관
+    //    - 파일: config.log.dir/gidbcn.YYYY-MM-DD.log, INFO 이상, config.log.retain_days일 보관
 
     // 4. API Actor 채널 생성 + spawn
     let (api_tx, api_rx) = mpsc::channel::<ApiRequest>(32);
@@ -274,54 +275,47 @@ custtype: P
 - **환율 없음**: `usd_krw`는 config에 저장하지 않음. actor 시작 시 기본값 1350.0, 이후 해외주식 조회 시 t_rate로 자동 갱신.
 - **log 섹션 자동 마이그레이션**: 기존 config.json에 `log` 키가 없으면 시작 시 defaults 포함해서 자동 저장.
 
-### portfolio.json
-```json
-{
-  "42621862": {
-    "holdings": [
-      {
-        "market": "KRX",
-        "symbol": "005930",
-        "name": "삼성전자",
-        "quantity": 10,
-        "avg_price": 70000.0,
-        "added_at": "2026-02-26T10:00:00+09:00",
-        "cached_price": 72500.0,
-        "cached_at": "2026-02-26T14:30:00+09:00"
-      }
-    ]
-  }
-}
+### holdings 테이블 (SQLite, portfolio.db)
+```sql
+CREATE TABLE holdings (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      INTEGER NOT NULL,
+    market       TEXT NOT NULL,          -- KRX, NAS, NYS, AMS, BOND, CART
+    symbol       TEXT NOT NULL,
+    name         TEXT NOT NULL DEFAULT '',
+    account      TEXT NOT NULL DEFAULT '',
+    quantity     REAL NOT NULL,
+    avg_price    REAL NOT NULL,
+    added_at     TEXT NOT NULL,          -- RFC3339
+    cached_price REAL,
+    cached_at    TEXT,
+    UNIQUE(user_id, symbol, account)
+);
 ```
-- 최상위 키: Telegram user_id (문자열)
-- market: `KRX` | `NAS` | `NYS` | `AMS` | `BOND` | `CART`
 - `name`: 시세 조회 시 API에서 자동 캐싱. `/port add` 시 직접 입력 가능.
 - `cached_price` / `cached_at`: 마지막 성공 조회 가격. 조회 실패 시 폴백용. `⏱` 마커로 표시.
 - **BOND 전용**: `quantity` = 액면가 1,000원 단위, `avg_price`/`cached_price` = 10,000원 액면 기준 가격
   - 평가금액 = `price × quantity × 0.1` (예: qty=50000, price=7485 → 37,425,000원)
 
-### signals.json
-```json
-{
-  "42621862": {
-    "signals": [
-      {
-        "id": "fc8f512e-ca6b-4a86-8ed4-e442863919db",
-        "symbol": "005930",
-        "condition": {
-          "type": "price_above",
-          "params": { "target": 80000.0 }
-        },
-        "active": true,
-        "created_at": "2026-02-26T10:30:00+09:00"
-      }
-    ]
-  }
-}
+### signals 테이블 (SQLite, portfolio.db)
+```sql
+CREATE TABLE signals (
+    id          TEXT PRIMARY KEY,       -- UUID v4
+    user_id     INTEGER NOT NULL,
+    symbol      TEXT NOT NULL,
+    account     TEXT NOT NULL DEFAULT '',
+    cond_type   TEXT NOT NULL,          -- price_above, price_below, profit_above, profit_below
+    cond_value  REAL NOT NULL,          -- target 또는 percentage
+    active      INTEGER NOT NULL DEFAULT 1,
+    created_at  TEXT NOT NULL           -- RFC3339
+);
 ```
-- 최상위 키: Telegram user_id (문자열)
 - `id`: UUID v4 (내부 식별용, 사용자에게 노출 안 됨)
 - 사용자에게는 `/signal list`의 순서 번호로 표시 및 삭제
+
+### JSON → SQLite 자동 마이그레이션
+- 최초 기동 시 holdings/signals 테이블이 비어있고 `portfolio.json`/`signals.json`이 존재하면 자동 임포트
+- JSON 파일은 삭제하지 않음 (백업 보존)
 
 **condition types:**
 | type | params | 설명 |
@@ -370,6 +364,43 @@ custtype: P
 - owner는 항상 허용. 추가 허용 유저 목록은 `config.json`의 `telegram.users`에 저장
 - 미허용 유저가 명령 시 `"접근 권한이 없습니다. (chat_id: xxx)"` 응답 → owner가 필요 시 추가 가능
 - `owner_chat_id` 캐싱: `thread_local! Cell<Option<i64>>`으로 메모리 유지. 최초 1회만 config.json 읽음. 오너 등록 시 `set_owner_chat_id()` 호출로 즉시 갱신.
+
+### 워치리스트 (`/watch` 또는 `/w`)
+| 명령어 | 설명 |
+|---|---|
+| `/w run` | 사냥 시작 (즉시 1회 + 자동 주기) |
+| `/w stop` | 사냥 중지 |
+| `/w ls` | 평가 완료 종목 (점수순) |
+| `/w pending` | 대기 중 후보 |
+| `/w info [TICKER]` | 종목 상세 |
+| `/w bl` | 블랙리스트 목록 |
+| `/w bl add [TICKER] [사유]` | 수동 블랙리스트 추가 |
+| `/w bl rm [TICKER]` | 블랙리스트 해제 |
+| `/w budget` | 오늘 Gemini API 사용량 |
+| `/w prompt hunt show` | 사냥용 프롬프트 확인 |
+| `/w prompt hunt set [내용]` | 사냥용 프롬프트 설정 |
+| `/w prompt judge show` | 평가용 프롬프트 확인 |
+| `/w prompt judge set [내용]` | 평가용 프롬프트 설정 |
+| `/w hist` | 최근 Gemini 호출 이력 |
+| `/w clear pending\|judged\|bl` | 상태별 일괄 삭제 |
+
+**사냥 파이프라인**: 사냥(Flash Lite) → 수집(한투 API) → 평가(Gemma) → 도태.
+**재평가**: KST 02:00 하루 1회, judged 후보 재수집→재평가→도태.
+프롬프트 미설정 시 `/w run` 불가. hunt/judge 프롬프트를 각각 설정해야 동작.
+상세: [docs/architecture.md](docs/architecture.md) → "워치리스트 (US 소형주 디스커버리)"
+
+**watchlist 설정** (config.json):
+| 키 | 기본값 | 설명 |
+|---|---|---|
+| `hunt_model` | gemini-2.5-flash-lite | 사냥 모델 |
+| `gemma_model` | gemma-3-27b-it | 평가 모델 |
+| `max_hunt_calls_per_day` | 20 | 일일 사냥(Flash Lite) 호출 한도 |
+| `max_judge_calls_per_day` | 14400 | 일일 평가(Gemma) 호출 한도 |
+| `max_survivors` | 50 | 도태 후 생존 상한 |
+| `candidate_count` | 30 | 사냥당 후보 수 |
+| `hunt_interval_minutes` | 30 | 사냥 주기 (분) |
+| `min_score` | 60.0 | 처단 기준 점수 |
+| `retention_days` | 100 | 데이터 보관 기간 (일) |
 
 ### 시스템
 | 명령어 | 설명 |
@@ -436,6 +467,22 @@ uuid = { version = "1", features = ["v4"] }
 | `Market::exchange_code()` | 해외주식 EXCD 코드 (NAS/NYS/AMS만 반환) |
 | `Market::value_factor()` | 평가금액 보정계수. BOND=0.1, 나머지=1.0 |
 | `Market::product_type_code()` | 상품기본조회 PRDT_TYPE_CD. KRX=300, NAS=512, NYS=513, AMS=529, BOND=302 |
+
+---
+
+## 통신 복원력
+
+3중 방어 구조로 API 통신 안정성 확보:
+
+| 방어 단계 | 메커니즘 | 대상 |
+|-----------|----------|------|
+| 1차 | `pool_idle_timeout(55s)` — stale connection 사전 제거 | 한투 API |
+| 2차 | `send_with_retry` — 연결 오류 시 1회 재시도 (타임아웃 제외) | 한투 API |
+| 3차 | 스케줄러 주기적 재시도 — 실패 시 다음 5분 주기에 자동 재시도 | 시그널 엔진 |
+
+텔레그램 봇은 teloxide 내장 long-polling 복원력으로 네트워크 단절 시 자동 재연결.
+
+상세: [docs/architecture.md](docs/architecture.md) → "통신 복원력 (3중 방어)"
 
 ---
 
@@ -537,3 +584,14 @@ uuid = { version = "1", features = ["v4"] }
 💱 USD/KRW: 1,450
 ```
 - `💱 USD/KRW` 줄: 미국 종목 평가금액이 0보다 클 때만 표시
+
+---
+
+## 개선사항
+
+### ~~LocalSet + spawn_local 전환 검토~~ ✅ 완료
+`tokio::spawn` → `LocalSet` + `spawn_local` 전환 완료.
+- `#[tokio::main]` 매크로 제거 → 수동 런타임 + `LocalSet::block_on()`
+- `tokio::spawn` 2곳 → `tokio::task::spawn_local`
+- `!Send` 타입(`rusqlite::Connection` 등)을 Actor 내부에서 자유롭게 사용 가능
+- GMainContext per-thread 의미론과 정확히 일치

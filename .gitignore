@@ -1,6 +1,7 @@
 /target
 .vscode/
 .claude/
+CLAUDE.md
 .cargo/
 *.code-workspace
 data/config.json

@@ -22,10 +22,16 @@ pub async fn get_price(ctx: &ActorContext, isin: &str) -> Result<BondData> {
 
     let status = http_resp.status();
     let body = http_resp.text().await.context("Bond price body read failed")?;
-    let resp: serde_json::Value = serde_json::from_str(&body).with_context(|| {
+    let _resp: serde_json::Value = serde_json::from_str(&body).with_context(|| {
         format!("Bond price parse failed (HTTP {status}): {body}")
     })?;
 
+    parse_price_response(&body)
+}
+
+pub fn parse_price_response(body: &str) -> Result<BondData> {
+    let resp: serde_json::Value =
+        serde_json::from_str(body).context("Bond price JSON parse failed")?;
     let output = &resp["output"];
     Ok(BondData {
         name: output["hts_kor_isnm"].as_str().unwrap_or("").to_string(),
@@ -36,4 +42,38 @@ pub async fn get_price(ctx: &ActorContext, isin: &str) -> Result<BondData> {
 
 fn parse_f64(s: Option<&str>) -> f64 {
     s.and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_normal_response() {
+        let body = r#"{
+            "output": {
+                "hts_kor_isnm": "국고03250-2512",
+                "bond_prpr": "7485",
+                "prdy_ctrt": "0.12"
+            },
+            "rt_cd": "0"
+        }"#;
+        let data = parse_price_response(body).unwrap();
+        assert_eq!(data.name, "국고03250-2512");
+        assert_eq!(data.current_price, 7485.0);
+        assert_eq!(data.change_pct, 0.12);
+    }
+
+    #[test]
+    fn parse_empty_output() {
+        let body = r#"{"output": {}, "rt_cd": "0"}"#;
+        let data = parse_price_response(body).unwrap();
+        assert_eq!(data.name, "");
+        assert_eq!(data.current_price, 0.0);
+    }
+
+    #[test]
+    fn parse_invalid_json_fails() {
+        assert!(parse_price_response("{broken").is_err());
+    }
 }

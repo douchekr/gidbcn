@@ -93,7 +93,7 @@ impl ActorContext {
                 tracing::info!("Token refreshed, expires at {}", token_info.expires_at);
                 self.config.token = Some(token_info.clone());
                 if let Err(e) = storage::update_config(|c| {
-                    c.kis_api.token = Some(token_info);
+                    c.secrets.set_token(&token_info.access_token, token_info.expires_at);
                 }) {
                     tracing::error!("Failed to save config after token refresh: {e}");
                 }
@@ -107,7 +107,7 @@ impl ActorContext {
 
 /// API Actor 메인 루프
 pub async fn run_api_actor(mut rx: mpsc::Receiver<ApiRequest>) {
-    let kis_config = storage::with_config(|c| c.kis_api.clone());
+    let kis_config = storage::with_config(|c| c.to_kis_api_config());
     let mut ctx = ActorContext::new(kis_config);
     let mut usd_krw: f64 = 1350.0;
 
@@ -152,6 +152,11 @@ pub async fn run_api_actor(mut rx: mpsc::Receiver<ApiRequest>) {
             ApiRequest::GetStockName { prdt_type_cd, pdno, respond_to } => {
                 ctx.rate_limit().await;
                 let result = stock_info::get_stock_name(&ctx, &prdt_type_cd, &pdno).await;
+                let _ = respond_to.send(result);
+            }
+            ApiRequest::GetOverseasDetail { exchange: exch, symbol, respond_to } => {
+                ctx.rate_limit().await;
+                let result = overseas::get_detail(&ctx, &exch, &symbol).await;
                 let _ = respond_to.send(result);
             }
         }
@@ -225,6 +230,23 @@ impl ApiHandle {
             .send(ApiRequest::GetStockName {
                 prdt_type_cd: market.product_type_code().to_string(),
                 pdno: symbol.to_string(),
+                respond_to: tx,
+            })
+            .await?;
+        rx.await?
+    }
+
+    /// 해외주식 상세 (워치리스트 평가용)
+    pub async fn get_overseas_detail(
+        &self,
+        exchange: &str,
+        symbol: &str,
+    ) -> Result<crate::models::messages::OverseasDetail> {
+        let (tx, rx) = oneshot::channel();
+        self.sender
+            .send(ApiRequest::GetOverseasDetail {
+                exchange: exchange.to_string(),
+                symbol: symbol.to_string(),
                 respond_to: tx,
             })
             .await?;

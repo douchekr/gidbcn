@@ -63,3 +63,70 @@ pub fn token_needs_refresh(token: &Option<TokenInfo>) -> bool {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_token(hours_from_now: i64) -> Option<TokenInfo> {
+        let kst = FixedOffset::east_opt(9 * 3600).unwrap();
+        let expires_at = Utc::now().with_timezone(&kst) + Duration::hours(hours_from_now);
+        Some(TokenInfo {
+            access_token: "test_token".to_string(),
+            expires_at,
+        })
+    }
+
+    #[test]
+    fn no_token_needs_refresh() {
+        assert!(token_needs_refresh(&None));
+    }
+
+    #[test]
+    fn fresh_token_no_refresh() {
+        // 12시간 후 만료 → 갱신 불필요
+        assert!(!token_needs_refresh(&make_token(12)));
+    }
+
+    #[test]
+    fn expiring_soon_needs_refresh() {
+        // 30분 후 만료 → 1시간 이내이므로 갱신 필요
+        let kst = FixedOffset::east_opt(9 * 3600).unwrap();
+        let expires_at = Utc::now().with_timezone(&kst) + Duration::minutes(30);
+        let token = Some(TokenInfo {
+            access_token: "test".to_string(),
+            expires_at,
+        });
+        assert!(token_needs_refresh(&token));
+    }
+
+    #[test]
+    fn already_expired_needs_refresh() {
+        // 이미 만료됨
+        assert!(token_needs_refresh(&make_token(-1)));
+    }
+
+    #[test]
+    fn exactly_one_hour_boundary() {
+        // 정확히 1시간 후 만료 → 경계값, 갱신 필요
+        let kst = FixedOffset::east_opt(9 * 3600).unwrap();
+        let expires_at = Utc::now().with_timezone(&kst) + Duration::hours(1);
+        let token = Some(TokenInfo {
+            access_token: "test".to_string(),
+            expires_at,
+        });
+        assert!(token_needs_refresh(&token));
+    }
+
+    #[test]
+    fn just_over_one_hour_no_refresh() {
+        // 1시간 1분 후 만료 → 아직 여유
+        let kst = FixedOffset::east_opt(9 * 3600).unwrap();
+        let expires_at = Utc::now().with_timezone(&kst) + Duration::minutes(61);
+        let token = Some(TokenInfo {
+            access_token: "test".to_string(),
+            expires_at,
+        });
+        assert!(!token_needs_refresh(&token));
+    }
+}

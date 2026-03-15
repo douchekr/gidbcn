@@ -11,41 +11,43 @@
   → handle_command() (commands.rs)
        │
        ├─ [시세 조회 없는 명령: /port add, /port remove, /port edit, /signal*]
-       │    storage::load_*()          // std::fs로 JSON 읽기
+       │    storage::load_*()          // SQLite SELECT (portfolio.db)
        │    데이터 변경
-       │    storage::save_*()          // std::fs로 JSON 쓰기
+       │    storage::save_*()          // SQLite DELETE+INSERT (트랜잭션)
        │    응답 문자열 반환
        │
        └─ [현재가 필요한 명령: /port list, /port info, /port summary]
-            storage::load_portfolio()
+            storage::load_portfolio()  // SQLite SELECT
             ┌─ CART 종목: cached_price 직접 사용 (API 호출 스킵)
             └─ 기타 종목: api.get_price_for_market() ──► API Actor (mpsc)
                                                           reqwest → 한투 API
                                                       ◄── PriceData (oneshot)
             formatter로 메시지 생성
-            [캐시 갱신] storage::save_portfolio()  // name, cached_price, cached_at
+            [캐시 갱신] storage::save_portfolio()  // SQLite 저장
             응답 문자열 반환
   → bot.send_message()
 ```
 
-**JSON 파일 경로**: `/opt/kkuepark/gidbcn/`
-- `portfolio.json` — 전체 사용자 포트폴리오 (user_id가 최상위 키)
-- `signals.json` — 전체 사용자 시그널 (user_id가 최상위 키)
+**데이터 저장**: `/opt/kkuepark/gidbcn/portfolio.db` (SQLite, WAL 모드)
+- `holdings` 테이블 — 전체 사용자 포트폴리오 (user_id 컬럼)
+- `signals` 테이블 — 전체 사용자 시그널 (user_id 컬럼)
+- `candidates`, `blacklist`, `prompts` 등 워치리스트 테이블도 동일 DB
 
-**동기 I/O**: `std::fs` 직접 사용 (수 KB 파일, current_thread에서 블로킹 무시 가능)
+**동기 I/O**: rusqlite 동기 호출 (current_thread에서 블로킹 무시 가능, `thread_local! RefCell<Connection>`)
 
 ---
 
 ## main.rs 초기화 흐름
 
 ```
+0. 수동 런타임 생성 (new_current_thread) + LocalSet::block_on()
 1. Config::load() — 파일 없으면 템플릿 생성 후 종료
 2. log 섹션 마이그레이션 — 누락 시 defaults 포함 자동 저장
 3. 필수 설정 검증 (bot_token, app_key, app_secret, hts_id)
 4. 로깅 초기화 (stdout: RUST_LOG, 파일: WARN 이상)
 5. storage::init_config(config) — Config 인메모리 싱글턴 적재
-6. API Actor 채널 생성 (mpsc, buffer=32) + tokio::spawn
-7. 스케줄러 spawn (api_handle + tg_bot)
+6. API Actor 채널 생성 (mpsc, buffer=32) + spawn_local
+7. 스케줄러 spawn_local (api_handle + tg_bot)
 8. 텔레그램 봇 실행 (메인 태스크, block)
 ```
 
@@ -73,21 +75,31 @@ pub fn update_config<F>(f: F) -> Result<()> { ... } // 변경 + 파일 저장
 
 ## 스케줄러
 
-`tokio::time::interval` 단일 루프. `tokio-cron-scheduler` 미사용.
+`tokio::time::interval` 기반 `tokio::select!` 루프. `tokio-cron-scheduler` 미사용.
 
 ```rust
-pub async fn run_scheduler(api: ApiHandle, bot: Bot) {
-    let mut signal_tick = interval(signal_interval);  // 기본 5분
+pub async fn run_scheduler(api, bot, discovery_enabled, discovery_trigger) {
+    let mut signal_tick = interval(signal_interval);   // 기본 5분
+    let mut hunt_tick = interval(hunt_interval);       // 기본 30분
+    let mut reeval_tick = interval(Duration::from_secs(60));  // 1분마다 시각 체크
+
     loop {
-        signal_tick.tick().await;
-        if is_market_hours() {
-            for user_id in storage::list_user_ids() {
-                engine::check_all_signals(&api, &bot, user_id).await;
-            }
+        tokio::select! {
+            _ = signal_tick.tick() => { /* 장중이면 시그널 체크 */ }
+            _ = hunt_tick.tick() => { /* 사냥 사이클 */ }
+            _ = discovery_trigger.notified() => { /* /w run 즉시 실행 */ }
+            _ = reeval_tick.tick() => { /* KST 02:00이면 재평가 */ }
         }
     }
 }
 ```
+
+| 작업 | 주기 | 진입 조건 |
+|------|------|-----------|
+| 시그널 체크 | 5분 | `is_market_hours()` |
+| 사냥 사이클 | 30분 | `discovery_enabled && prompts_configured && !hunt_exhausted && !judge_exhausted` |
+| 즉시 실행 | 트리거 | `!hunt_exhausted && !judge_exhausted` |
+| 재평가 | 1분 체크 | `discovery_enabled && prompts_configured && KST 02시 && 오늘 미실행 && !judge_exhausted` |
 
 ### 장시간 판단
 
@@ -234,13 +246,49 @@ pub async fn run_api_actor(mut rx: mpsc::Receiver<ApiRequest>) {
 }
 ```
 
-### stale connection 재시도 (`send_with_retry`)
+### 통신 복원력 (3중 방어)
 
-HTTP keep-alive 연결을 서버가 종료한 뒤 클라이언트가 재사용 시도 시 발생하는 오류 처리:
+실 운영 중 발생한 "connection closed before message completed" 오류 대응으로 단계적 방어 구축.
 
-- 연결 오류(`is_request` / `is_connect`)에 한해 1회 재시도
-- 타임아웃(`is_timeout`)은 재시도하지 않음 (대기 시간 2배 방지)
-- `pool_idle_timeout(55s)` 1차 방어 + `send_with_retry` 2차 방어
+**경위**: 한투 API 서버가 idle connection을 ~60초에 끊는데, reqwest의 keep-alive 풀이 stale connection을 재사용하며 오류 발생. 두 차례 보강으로 해결.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 1차 방어: pool_idle_timeout(55s)                             │
+│   서버 idle timeout(~60s)보다 짧게 설정하여 stale connection  │
+│   사전 제거. 대부분의 오류가 여기서 차단됨.                     │
+│                                                              │
+│ 2차 방어: send_with_retry (ActorContext)                      │
+│   그래도 빠진 stale connection → 1회 재시도.                   │
+│   - is_request / is_connect 오류만 재시도                     │
+│   - is_timeout은 재시도 안 함 (대기 시간 2배 방지)             │
+│   - try_clone()으로 요청 복제 → 실패 시 원본 에러 반환         │
+│                                                              │
+│ 3차 방어: 시그널 엔진 주기적 재시도                             │
+│   개별 종목 시세 조회 실패 → 에러 로그 + 스킵.                 │
+│   다음 스케줄러 주기(5분)에 자동 재시도.                       │
+│   텔레그램 전송 실패 → active 유지 → 다음 주기에 재전송.       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**텔레그램 봇 복원력** (teloxide 내장):
+- long-polling (`getUpdates`) 기반 — 서버 push 아닌 클라이언트 pull
+- 네트워크 단절 → teloxide 내부에서 exponential backoff 재시도
+- 복구 시 `getUpdates`의 offset 기반으로 누락 없이 이어감
+- `enable_ctrlc_handler()` 외에는 종료 조건 없음 → Ctrl+C 전까지 무한 복구
+
+**에러 로깅 개선**:
+- 모든 에러 출력: `{e}` → `{e:#}` (anyhow 에러 체인 전체 출력)
+- HTTP 응답 body 포함 로깅 → 원인 추적 용이
+- API Actor 내부에서 토큰 갱신 실패도 로그 (서비스 중단 없이 다음 요청에서 재시도)
+
+**reqwest 클라이언트 설정** (ActorContext):
+| 설정 | 값 | 이유 |
+|------|-----|------|
+| `connect_timeout` | 5초 | TCP+TLS 연결 수립 |
+| `timeout` | 15초 | 전체 요청 (연결~응답 수신) |
+| `pool_idle_timeout` | 55초 | stale connection 1차 방어 |
+| TLS | rustls | OpenSSL 무의존 |
 
 ### current_thread에서의 동작
 
@@ -288,13 +336,13 @@ Mutex 없이 채널만으로 동시성 확보.
 스케줄러 (5분 interval)
   → is_market_hours()? (KRX 09:00~15:30 / US 22:30~05:00 KST)
   → check_all_signals()
-       1. portfolio.json + signals.json 로드
+       1. holdings + signals 테이블 로드 (SQLite)
        2. 활성(active=true) 시그널만 순회
        3. 포트폴리오에서 종목의 Market 파악 (없으면 스킵)
        4. market.is_open_now()? 장외면 스킵
        5. API Actor에 현재가 요청 (mpsc/oneshot)
        6. cached_price/cached_at 갱신
-       7. 조건 평가 → 발동 시 텔레그램 전송 + active=false 저장
+       7. 조건 평가 → 발동 시 텔레그램 전송 + active=false SQLite 저장
 ```
 
 ### 조건별 판정
@@ -308,7 +356,7 @@ Mutex 없이 채널만으로 동시성 확보.
 
 ### 발동 후 처리
 
-- **1회성**: 텔레그램 전송 성공 시에만 `active: false` → signals.json 저장
+- **1회성**: 텔레그램 전송 성공 시에만 `active: false` → SQLite 저장
 - 전송 실패 시 `active` 유지 → 다음 주기에 재시도
 - 한 주기 내 여러 시그널 발동 가능 → 변경분 한 번에 저장
 
@@ -328,3 +376,101 @@ Mutex 없이 채널만으로 동시성 확보.
 - **BOND**: 가격이 액면 10,000원 기준, 수량이 1,000원 단위 → `× 0.1` 보정 (`Market::value_factor()`)
 - **해외주식**: `eval`은 달러 단위로 계산 후, 총합 합산 시 `× usd_krw`
 - **손익**: `(현재가 - 매입가) × qty × factor` (해외주식은 추가로 `× usd_krw`)
+
+---
+
+## 워치리스트 (US 소형주 디스커버리)
+
+### 개요
+미국 소형주 관심종목 자동 발굴/평가 시스템. Google AI Studio API (Flash Lite + Gemma) + 한투 API 조합.
+
+### 사냥 사이클 (`pipeline::run_cycle`)
+
+```
+스케줄러 진입 조건: discovery_enabled && prompts_configured && !hunt_exhausted && !judge_exhausted
+
+0. cleanup_old_data(retention_days)        ← 오래된 DB 레코드 정리
+
+1. 사냥 — gemini::hunt() [Flash Lite, 1콜]
+   ├─ hunt 한도 체크 (max_hunt_calls_per_day)    ← API 호출 직전 본체 체크
+   ├─ 프롬프트 + BL 목록 조합 → Flash Lite API 호출
+   ├─ log_api_call("gemini", "hunt") 기록
+   ├─ JSON 파싱 → HuntResult[] (ticker, market, name, sector, reason)
+   ├─ prompt_history 저장
+   └─ BL 필터링 → candidates(status=pending) 삽입
+
+2. 수집 — 한투 API [N건, 순차]
+   ├─ pending 후보 전부 조회
+   ├─ fetch_detail(ticker, market_hint) → NAS→NYS→AMS 순회
+   ├─ 성공: format_detail_for_gemini() → status=collected + detail_text 저장
+   └─ 실패(3개 거래소 전부): 자동 BL 등록 + status=blacklisted
+
+3. 평가 — gemini::judge() [Gemma, 1콜]
+   ├─ judge 한도 체크 (max_judge_calls_per_day)   ← API 호출 직전 본체 체크
+   ├─ collected 전체의 detail_text 합쳐서 Gemma API 호출
+   ├─ log_api_call("gemini", "judge") 기록
+   ├─ JSON 파싱 → JudgeResult[] (ticker, score, verdict)
+   ├─ score < min_score → BL + status=blacklisted (처단)
+   └─ score >= min_score → status=judged (생존)
+
+4. 도태 — cull_excess_judged(max_survivors)
+   └─ judged 상위 N개만 유지, 나머지 삭제
+```
+
+### 재평가 사이클 (`pipeline::run_reeval`)
+
+KST 02:00, 하루 1회 자동 실행. 스케줄러 진입 조건: `!judge_exhausted()`
+
+```
+0. reset_judged_for_reeval() → 기존 judged 전부 → pending 리셋
+1. 재수집 (사냥 사이클 2단계와 동일)
+2. 재평가 (사냥 사이클 3단계와 동일)
+3. 도태 (사냥 사이클 4단계와 동일)
+```
+
+### 후보 상태 전이
+
+```
+pending → collected → judged (생존)
+                   → blacklisted (처단: score < min_score)
+pending → blacklisted (수집 실패)
+judged → pending (재평가 리셋) → ...반복
+```
+
+### 한도 체크 구조
+
+API 호출 직전 본체 체크 + 스케줄러 진입 시 사전필터 (이중 체크):
+
+| API | 본체 (gemini.rs) | 사전필터 (scheduler.rs) | 기본 한도 |
+|-----|-----------------|----------------------|-----------|
+| hunt (Flash Lite) | `hunt()` 진입부 | 사냥 사이클 진입 시 | 20/일 |
+| judge (Gemma) | `judge()` 진입부 | 사냥/재평가 사이클 진입 시 | 14,400/일 |
+
+사용량 추적: `api_usage` 테이블에 `log_api_call()` → 성공/실패 구분 없이 전체 카운트.
+리셋: 별도 로직 없음. `called_at LIKE '{today}%'` 날짜 매칭으로 자연 리셋.
+
+### 모델 구성
+
+| 용도 | config 키 | 기본 모델 |
+|------|-----------|-----------|
+| 사냥 | `hunt_model` | gemini-2.5-flash-lite |
+| 평가 | `gemma_model` | gemma-3-27b-it |
+
+둘 다 Google AI Studio API (`generativelanguage.googleapis.com`)를 `gemini_api_key` 하나로 호출.
+Gemini 호출은 API Actor를 거치지 않음 (별도 `reqwest::Client` 직접 사용).
+
+### 프롬프트 관리
+- **사냥용 (hunt)**: 종목 발굴 기준. 사용자 설정 필수.
+- **평가용 (judge)**: 평가 기준. 사용자 설정 필수.
+- 기본 프롬프트 없음 — 미설정 시 디스커버리 불가.
+- DB `prompts` 테이블에 저장, 텔레그램에서 실시간 수정 가능.
+
+### 데이터 저장
+- **SQLite** (`/opt/kkuepark/gidbcn/portfolio.db`, WAL 모드)
+- `thread_local! RefCell<Option<Connection>>` — LocalSet 덕에 `!Send` OK
+- 테이블: candidates, blacklist, prompts, prompt_history, api_usage, holdings, signals
+
+### 한투 API 확장
+- `OverseasDetail` 구조체: 기존 PriceData + 시총, PER, PBR, EPS, BPS, 거래량, 52주고저, 섹터
+- `overseas::get_detail()`: 동일 엔드포인트(HHDFS76200200)에서 전체 필드 파싱
+- `ApiRequest::GetOverseasDetail` + `ApiHandle::get_overseas_detail()`

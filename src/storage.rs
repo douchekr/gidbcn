@@ -1,26 +1,35 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use crate::config::Config;
 use crate::models::portfolio::PortfolioStore;
 use crate::models::signal::SignalStore;
+use crate::watchlist::db as wdb;
 
 pub const DATA_DIR: &str = "/opt/kkuepark/gidbcn";
 pub const CONFIG_PATH: &str = "/opt/kkuepark/gidbcn/config.json";
-pub const PORTFOLIO_PATH: &str = "/opt/kkuepark/gidbcn/portfolio.json";
-pub const SIGNALS_PATH: &str = "/opt/kkuepark/gidbcn/signals.json";
 
 // --- Config 인메모리 싱글턴 (current_thread 런타임 → 단일 스레드) ---
 
 thread_local! {
     static IN_MEMORY_CONFIG: RefCell<Option<Config>> = RefCell::new(None);
+    static PASSPHRASE: RefCell<Option<String>> = RefCell::new(None);
 }
 
 /// 시작 시 1회 호출. 파일에서 로드한 config를 메모리에 적재.
 pub fn init_config(config: Config) {
     IN_MEMORY_CONFIG.with(|c| *c.borrow_mut() = Some(config));
+}
+
+/// 암호화 모드: 패스프레이즈 저장 (unlock 시 호출)
+pub fn set_passphrase(passphrase: &str) {
+    PASSPHRASE.with(|p| *p.borrow_mut() = Some(passphrase.to_string()));
+}
+
+/// 현재 암호화 모드인지
+pub fn is_encrypted() -> bool {
+    PASSPHRASE.with(|p| p.borrow().is_some())
 }
 
 /// 메모리 config 읽기 전용.
@@ -35,6 +44,7 @@ where
 }
 
 /// 메모리 config 수정 + 파일 저장.
+/// 암호화 모드면 save_encrypted, 평문이면 save.
 pub fn update_config<F>(f: F) -> Result<()>
 where
     F: FnOnce(&mut Config),
@@ -43,84 +53,46 @@ where
         let mut borrow = c.borrow_mut();
         let config = borrow.as_mut().expect("Config not initialized");
         f(config);
-        config.save(CONFIG_PATH)
+
+        PASSPHRASE.with(|p| {
+            let p_borrow = p.borrow();
+            if let Some(pass) = p_borrow.as_ref() {
+                tracing::debug!(
+                    "update_config: saving encrypted (gemini_api_key={})",
+                    if config.secrets.gemini_api_key.is_empty() { "EMPTY" } else { "SET" }
+                );
+                config.save_encrypted(CONFIG_PATH, pass)
+            } else {
+                config.save(CONFIG_PATH)
+            }
+        })
     })
 }
 
-type PortfolioDb = HashMap<String, PortfolioStore>;
-type SignalDb = HashMap<String, SignalStore>;
-
-thread_local! {
-    static IN_MEMORY_PORTFOLIO: RefCell<Option<PortfolioDb>> = RefCell::new(None);
-    static IN_MEMORY_SIGNALS:   RefCell<Option<SignalDb>>    = RefCell::new(None);
-}
-
-fn load_db<T: serde::de::DeserializeOwned + Default + serde::Serialize>(path: &str) -> HashMap<String, T> {
-    match std::fs::read_to_string(path) {
-        Ok(data) => serde_json::from_str(&data).unwrap_or_else(|e| {
-            tracing::warn!("Failed to parse {path}: {e}, using empty db");
-            HashMap::new()
-        }),
-        Err(_) => HashMap::new(),
-    }
-}
-
-fn save_db<T: serde::Serialize>(path: &str, db: &HashMap<String, T>) -> Result<()> {
-    let json = serde_json::to_string_pretty(db)?;
-    std::fs::write(path, json).with_context(|| format!("Failed to write {path}"))?;
-    Ok(())
-}
-
-fn with_portfolio_db<F, R>(f: F) -> R
-where
-    F: FnOnce(&mut PortfolioDb) -> R,
-{
-    IN_MEMORY_PORTFOLIO.with(|cache| {
-        let mut borrow = cache.borrow_mut();
-        if borrow.is_none() {
-            *borrow = Some(load_db(PORTFOLIO_PATH));
-        }
-        f(borrow.as_mut().unwrap())
-    })
-}
-
-fn with_signal_db<F, R>(f: F) -> R
-where
-    F: FnOnce(&mut SignalDb) -> R,
-{
-    IN_MEMORY_SIGNALS.with(|cache| {
-        let mut borrow = cache.borrow_mut();
-        if borrow.is_none() {
-            *borrow = Some(load_db(SIGNALS_PATH));
-        }
-        f(borrow.as_mut().unwrap())
-    })
-}
-
-// --- Portfolio ---
+// --- Portfolio (SQLite) ---
 
 pub fn load_portfolio(user_id: i64) -> PortfolioStore {
-    with_portfolio_db(|db| db.get(&user_id.to_string()).cloned().unwrap_or_default())
+    wdb::load_holdings(user_id).unwrap_or_else(|e| {
+        tracing::warn!("Failed to load portfolio for {user_id}: {e:#}");
+        PortfolioStore::default()
+    })
 }
 
 pub fn save_portfolio(user_id: i64, store: &PortfolioStore) -> Result<()> {
-    with_portfolio_db(|db| {
-        db.insert(user_id.to_string(), store.clone());
-        save_db(PORTFOLIO_PATH, db)
-    })
+    wdb::save_holdings(user_id, store)
 }
 
-// --- Signals ---
+// --- Signals (SQLite) ---
 
 pub fn load_signals(user_id: i64) -> SignalStore {
-    with_signal_db(|db| db.get(&user_id.to_string()).cloned().unwrap_or_default())
+    wdb::load_signals_db(user_id).unwrap_or_else(|e| {
+        tracing::warn!("Failed to load signals for {user_id}: {e:#}");
+        SignalStore::default()
+    })
 }
 
 pub fn save_signals(user_id: i64, store: &SignalStore) -> Result<()> {
-    with_signal_db(|db| {
-        db.insert(user_id.to_string(), store.clone());
-        save_db(SIGNALS_PATH, db)
-    })
+    wdb::save_signals_db(user_id, store)
 }
 
 // --- 허용 사용자 (config 인메모리) ---
@@ -136,8 +108,10 @@ pub fn save_allowed_users(users: &[i64]) -> Result<()> {
 }
 
 // --- 전체 사용자 목록 (스케줄러용) ---
-// portfolio.json의 키 목록에서 user_id 반환
 
 pub fn list_user_ids() -> Vec<i64> {
-    with_portfolio_db(|db| db.keys().filter_map(|k| k.parse::<i64>().ok()).collect())
+    wdb::list_holding_user_ids().unwrap_or_else(|e| {
+        tracing::warn!("Failed to list user ids: {e:#}");
+        vec![]
+    })
 }

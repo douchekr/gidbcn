@@ -16,6 +16,27 @@ pub struct BondData {
     pub change_pct: f64,
 }
 
+/// 해외주식 상세 (워치리스트 평가용)
+#[derive(Debug, Clone)]
+pub struct OverseasDetail {
+    pub name: String,
+    pub current_price: f64,
+    pub change_pct: f64,
+    pub market_cap: f64,
+    pub per: f64,
+    pub pbr: f64,
+    pub eps: f64,
+    pub bps: f64,
+    pub shares: f64,
+    pub volume: f64,
+    #[allow(dead_code)]
+    pub volume_amount: f64,
+    pub high_52w: f64,
+    pub low_52w: f64,
+    pub sector: String,
+    pub prev_volume: f64,
+}
+
 pub enum ApiRequest {
     GetDomesticPrice {
         symbol: String,
@@ -37,5 +58,10 @@ pub enum ApiRequest {
         prdt_type_cd: String,
         pdno: String,
         respond_to: oneshot::Sender<Result<String>>,
+    },
+    GetOverseasDetail {
+        exchange: String,
+        symbol: String,
+        respond_to: oneshot::Sender<Result<OverseasDetail>>,
     },
 }

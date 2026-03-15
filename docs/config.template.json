@@ -1,11 +1,4 @@
 {
-  "kis_api": {
-    "app_key": "YOUR_APP_KEY",
-    "app_secret": "YOUR_APP_SECRET",
-    "base_url": "https://openapi.koreainvestment.com:9443",
-    "hts_id": "YOUR_HTS_ID",
-    "token": null
-  },
   "telegram": {
     "bot_token": "YOUR_BOT_TOKEN",
     "owner_chat_id": 0,
@@ -17,5 +10,23 @@
   "log": {
     "dir": "/opt/kkuepark/gidbcn",
     "retain_days": 7
+  },
+  "watchlist": {
+    "hunt_model": "gemini-2.5-flash-lite",
+    "gemma_model": "gemma-3-27b-it",
+    "max_hunt_calls_per_day": 20,
+    "max_judge_calls_per_day": 14400,
+    "max_survivors": 50,
+    "candidate_count": 30,
+    "hunt_interval_minutes": 30,
+    "min_score": 60.0,
+    "retention_days": 100
+  },
+  "kis_base_url": "https://openapi.koreainvestment.com:9443",
+  "secrets": {
+    "kis_app_key": "YOUR_APP_KEY",
+    "kis_app_secret": "YOUR_APP_SECRET",
+    "kis_hts_id": "YOUR_HTS_ID",
+    "gemini_api_key": "YOUR_GEMINI_API_KEY"
   }
 }

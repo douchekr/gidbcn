@@ -4,11 +4,15 @@ use teloxide::prelude::*;
 use teloxide::types::InputFile;
 use teloxide::utils::command::BotCommands;
 
+use std::sync::Arc;
+
 use crate::api::ApiHandle;
 use crate::bot::formatter;
+use crate::config::BootConfig;
 use crate::models::messages::PriceData;
 use crate::models::portfolio::{Holding, Market};
 use crate::models::signal::{Condition, Signal};
+use crate::watchlist::{db as wdb, models::PromptType};
 use uuid::Uuid;
 use crate::storage;
 
@@ -35,6 +39,14 @@ pub enum Command {
     Ping,
     #[command(description = "사용자 관리 (오너 전용): /user add|rm|ls")]
     User(String),
+    #[command(description = "워치리스트: /watch run|ls|pending|info|bl|budget|prompt|history")]
+    Watch(String),
+    #[command(description = "워치리스트 단축 (/w)")]
+    W(String),
+    #[command(description = "잠금 해제 (오너 전용)")]
+    Unlock(String),
+    #[command(description = "설정 암호화 (오너 전용)")]
+    Encrypt(String),
 }
 
 pub async fn handle_command(
@@ -42,6 +54,8 @@ pub async fn handle_command(
     msg: Message,
     cmd: Command,
     api: ApiHandle,
+    discovery_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    discovery_trigger: std::sync::Arc<tokio::sync::Notify>,
 ) -> ResponseResult<()> {
     let chat_id = msg.chat.id;
 
@@ -68,6 +82,14 @@ pub async fn handle_command(
         bot.send_message(chat_id, format!(
             "✅ 봇 오너로 등록되었습니다. (chat_id: {user_id})"
         )).await?;
+        // 평문 모드 경고
+        if !storage::is_encrypted() {
+            bot.send_message(chat_id,
+                "⚠️ 평문 모드로 실행 중입니다.\n\
+                 config.json에 API 키가 평문으로 저장되어 있어요.\n\n\
+                 /encrypt [패스프레이즈] 로 암호화하세요."
+            ).await?;
+        }
         user_id
     } else {
         owner_chat_id
@@ -107,12 +129,27 @@ pub async fn handle_command(
         Command::Ping => "pong".to_string(),
         Command::Port(args) | Command::P(args) => cmd_port(user_id, &args, &api).await,
         Command::Signal(args) | Command::S(args) => cmd_signal(user_id, &args),
+        Command::Watch(args) | Command::W(args) => {
+            if !is_owner {
+                "이 명령어는 봇 오너만 사용할 수 있습니다.".to_string()
+            } else {
+                cmd_watchlist(&args, &api, &discovery_enabled, &discovery_trigger).await
+            }
+        }
         Command::Status | Command::St => cmd_status(user_id),
         Command::User(args) => {
             if !is_owner {
                 "이 명령어는 봇 오너만 사용할 수 있습니다.".to_string()
             } else {
                 cmd_user(&args)
+            }
+        }
+        Command::Unlock(_) => "이미 잠금 해제 상태입니다.".to_string(),
+        Command::Encrypt(args) => {
+            if !is_owner {
+                "이 명령어는 봇 오너만 사용할 수 있습니다.".to_string()
+            } else {
+                cmd_encrypt(&bot, chat_id, msg.id, &args).await
             }
         }
     };
@@ -151,6 +188,15 @@ fn help_text() -> String {
      시스템:\n\
      /status|st — 시스템 상태\n\
      /ping — 핑\n\n\
+     워치리스트 (/watch 또는 /w):\n\
+     /w run — 디스커버리 사이클\n\
+     /w ls — 평가 완료 종목\n\
+     /w pending — 대기 중 후보\n\
+     /w info [TICKER] — 종목 상세\n\
+     /w bl — 블랙리스트 관리\n\
+     /w budget — Gemini 사용량\n\
+     /w prompt hunt|judge show|set\n\
+     /w hist — 호출 이력\n\n\
      사용자 관리 (/user, 오너 전용):\n\
      /user add|a [chat_id]\n\
      /user rm [chat_id]\n\
@@ -1217,6 +1263,389 @@ fn cmd_status(user_id: i64) -> String {
     )
 }
 
+// --- 워치리스트 ---
+
+async fn cmd_watchlist(
+    args: &str,
+    _api: &ApiHandle,
+    discovery_enabled: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    discovery_trigger: &std::sync::Arc<tokio::sync::Notify>,
+) -> String {
+    use std::sync::atomic::Ordering;
+
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    let sub = parts.first().copied().unwrap_or("");
+    let rest = parts.get(1..).unwrap_or(&[]).join(" ");
+
+    match sub {
+        "run" => {
+            // 프롬프트 설정 확인
+            let hunt = wdb::get_prompt(PromptType::Hunt).ok().flatten();
+            let judge = wdb::get_prompt(PromptType::Judge).ok().flatten();
+            if hunt.is_none() || judge.is_none() {
+                let mut missing = Vec::new();
+                if hunt.is_none() { missing.push("hunt (사냥용)"); }
+                if judge.is_none() { missing.push("judge (평가용)"); }
+                return format!(
+                    "⚠️ 프롬프트 미설정: {}\n\n\
+                     /w prompt hunt set [내용]\n\
+                     /w prompt judge set [내용]",
+                    missing.join(", ")
+                );
+            }
+
+            if discovery_enabled.load(Ordering::SeqCst) {
+                return "이미 디스커버리가 실행 중입니다.".to_string();
+            }
+
+            discovery_enabled.store(true, Ordering::SeqCst);
+            discovery_trigger.notify_one(); // 즉시 사냥 1회
+            let hunt_min = storage::with_config(|c| c.watchlist.hunt_interval_minutes);
+            format!(
+                "🔍 사냥 시작! (즉시 1회 + {hunt_min}분 주기)\n\
+                 /w stop 으로 중지"
+            )
+        }
+        "stop" => {
+            if !discovery_enabled.load(Ordering::SeqCst) {
+                return "디스커버리가 실행 중이 아닙니다.".to_string();
+            }
+            discovery_enabled.store(false, Ordering::SeqCst);
+            "⏹ 디스커버리 중지".to_string()
+        }
+        "list" | "ls" => cmd_watch_list(),
+        "pending" => cmd_watch_pending(),
+        "info" | "i" => cmd_watch_info(&rest.to_uppercase()),
+        "blacklist" | "bl" => cmd_watch_blacklist(&rest),
+        "budget" => cmd_watch_budget(),
+        "prompt" => cmd_watch_prompt(&rest),
+        "history" | "hist" => cmd_watch_history(),
+        "clear" => cmd_watch_clear(&rest),
+        _ => "📋 워치리스트 명령어\n\n\
+              /w run — 사냥 시작 (사냥/수집/평가 자동)\n\
+              /w stop — 사냥 중지\n\
+              /w ls — 평가 완료 종목 (점수순)\n\
+              /w pending — 대기 중 후보\n\
+              /w info [TICKER] — 종목 상세\n\
+              /w bl — 블랙리스트\n\
+              /w bl add [TICKER] [사유]\n\
+              /w bl rm [TICKER]\n\
+              /w budget — 오늘 Gemini 사용량\n\
+              /w prompt hunt show|set\n\
+              /w prompt judge show|set\n\
+              /w hist — 최근 호출 이력\n\
+              /w clear pending|judged|bl — 일괄 삭제"
+            .to_string(),
+    }
+}
+
+
+fn cmd_watch_list() -> String {
+    use crate::watchlist::models::CandidateStatus;
+    let candidates = match wdb::list_candidates(Some(CandidateStatus::Judged)) {
+        Ok(c) => c,
+        Err(e) => return format!("조회 실패: {e:#}"),
+    };
+    if candidates.is_empty() {
+        return "평가된 종목이 없습니다. /w run 으로 디스커버리를 실행하세요.".to_string();
+    }
+    let mut msg = format!("⚖️ 평가 완료 ({})개\n", candidates.len());
+    for (i, c) in candidates.iter().enumerate().take(30) {
+        let score = c.score.map_or("-".to_string(), |s| format!("{s:.0}"));
+        let verdict = c.verdict.as_deref().unwrap_or("");
+        let verdict_short = truncate_chars(verdict, 40);
+        msg.push_str(&format!(
+            "\n{}. {} ({}) [{score}점]\n   {verdict_short}",
+            i + 1, c.ticker, c.sector,
+        ));
+    }
+    msg
+}
+
+fn cmd_watch_pending() -> String {
+    use crate::watchlist::models::CandidateStatus;
+    let candidates = match wdb::list_candidates(Some(CandidateStatus::Pending)) {
+        Ok(c) => c,
+        Err(e) => return format!("조회 실패: {e:#}"),
+    };
+    if candidates.is_empty() {
+        return "대기 중인 후보가 없습니다.".to_string();
+    }
+    let mut msg = format!("🎯 대기 중 후보 ({}개)\n", candidates.len());
+    for (i, c) in candidates.iter().enumerate().take(50) {
+        msg.push_str(&format!(
+            "\n{}. {} — {} ({})",
+            i + 1, c.ticker, c.name, c.sector,
+        ));
+    }
+    msg
+}
+
+fn cmd_watch_info(ticker: &str) -> String {
+    if ticker.is_empty() {
+        return "사용법: /w info [TICKER]".to_string();
+    }
+    let candidate = match wdb::get_candidate_by_ticker(ticker) {
+        Ok(Some(c)) => c,
+        Ok(None) => return format!("{ticker} 을(를) 찾을 수 없습니다."),
+        Err(e) => return format!("조회 실패: {e:#}"),
+    };
+    let score = candidate.score.map_or("-".to_string(), |s| format!("{s:.0}"));
+    let verdict = candidate.verdict.as_deref().unwrap_or("-");
+    let status = candidate.status.as_str();
+    format!(
+        "🔍 {ticker}\n\
+         이름: {}\n\
+         섹터: {}\n\
+         상태: {status}\n\
+         점수: {score}\n\
+         판결: {verdict}\n\
+         사유: {}\n\
+         등록: {}",
+        candidate.name, candidate.sector, candidate.reason, candidate.created_at,
+    )
+}
+
+fn cmd_watch_blacklist(args: &str) -> String {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    match parts.first().copied() {
+        Some("add") | Some("a") => {
+            let ticker = match parts.get(1) {
+                Some(t) => t.to_uppercase(),
+                None => return "사용법: /w bl add [TICKER] [사유]".to_string(),
+            };
+            let reason = parts.get(2..).map(|p| p.join(" ")).unwrap_or_default();
+            match wdb::add_blacklist(&ticker, &reason) {
+                Ok(_) => format!("✅ {ticker} 블랙리스트 추가"),
+                Err(e) => format!("실패: {e:#}"),
+            }
+        }
+        Some("rm") | Some("remove") => {
+            let ticker = match parts.get(1) {
+                Some(t) => t.to_uppercase(),
+                None => return "사용법: /w bl rm [TICKER]".to_string(),
+            };
+            match wdb::remove_blacklist(&ticker) {
+                Ok(true) => format!("✅ {ticker} 블랙리스트 해제"),
+                Ok(false) => format!("{ticker} 은(는) 블랙리스트에 없습니다."),
+                Err(e) => format!("실패: {e:#}"),
+            }
+        }
+        _ => {
+            // 블랙리스트 목록 표시
+            let list = match wdb::list_blacklist() {
+                Ok(l) => l,
+                Err(e) => return format!("조회 실패: {e:#}"),
+            };
+            if list.is_empty() {
+                return "블랙리스트가 비어있습니다.".to_string();
+            }
+            let mut msg = format!("🚫 블랙리스트 ({}개)\n", list.len());
+            for b in &list {
+                msg.push_str(&format!("\n{} — {}", b.ticker, b.reason));
+            }
+            msg.push_str("\n\n/w bl add [TICKER] [사유]\n/w bl rm [TICKER]");
+            msg
+        }
+    }
+}
+
+fn cmd_watch_budget() -> String {
+    let hunt = match wdb::hunt_calls_today() {
+        Ok(n) => n,
+        Err(e) => return format!("조회 실패: {e:#}"),
+    };
+    let judge = match wdb::judge_calls_today() {
+        Ok(n) => n,
+        Err(e) => return format!("조회 실패: {e:#}"),
+    };
+    let (max_hunt, max_judge) = storage::with_config(|c| {
+        (c.watchlist.max_hunt_calls_per_day, c.watchlist.max_judge_calls_per_day)
+    });
+    format!("💰 오늘 사냥: {hunt}/{max_hunt} | 평가: {judge}/{max_judge}")
+}
+
+fn cmd_watch_prompt(args: &str) -> String {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    let prompt_type = match parts.first().copied() {
+        Some("hunt") => PromptType::Hunt,
+        Some("judge") => PromptType::Judge,
+        _ => return "사용법:\n/w prompt hunt show|set [내용]\n/w prompt judge show|set [내용]".to_string(),
+    };
+
+    let action = parts.get(1).copied().unwrap_or("show");
+
+    match action {
+        "show" => {
+            match wdb::get_prompt(prompt_type) {
+                Ok(Some(content)) => format!(
+                    "📝 {} 프롬프트:\n\n{}",
+                    prompt_type.as_str(), content
+                ),
+                Ok(None) => format!(
+                    "{} 프롬프트가 설정되지 않았습니다.\n/w prompt {} set [내용]",
+                    prompt_type.as_str(), prompt_type.as_str()
+                ),
+                Err(e) => format!("조회 실패: {e:#}"),
+            }
+        }
+        "set" => {
+            let content = parts.get(2..).map(|p| p.join(" ")).unwrap_or_default();
+            if content.is_empty() {
+                return format!("사용법: /w prompt {} set [프롬프트 내용]", prompt_type.as_str());
+            }
+            match wdb::set_prompt(prompt_type, &content) {
+                Ok(_) => format!("✅ {} 프롬프트 설정 완료", prompt_type.as_str()),
+                Err(e) => format!("저장 실패: {e:#}"),
+            }
+        }
+        _ => format!("사용법: /w prompt {} show|set [내용]", prompt_type.as_str()),
+    }
+}
+
+fn cmd_watch_clear(args: &str) -> String {
+    use crate::watchlist::models::CandidateStatus;
+    match args.trim() {
+        "pending" => {
+            match wdb::clear_candidates_by_status(CandidateStatus::Pending) {
+                Ok(n) => format!("🗑 pending {n}건 삭제"),
+                Err(e) => format!("삭제 실패: {e:#}"),
+            }
+        }
+        "judged" => {
+            match wdb::clear_candidates_by_status(CandidateStatus::Judged) {
+                Ok(n) => format!("🗑 judged {n}건 삭제"),
+                Err(e) => format!("삭제 실패: {e:#}"),
+            }
+        }
+        "bl" => {
+            match wdb::clear_all_blacklist() {
+                Ok(n) => format!("🗑 블랙리스트 {n}건 삭제"),
+                Err(e) => format!("삭제 실패: {e:#}"),
+            }
+        }
+        _ => "사용법: /w clear pending|judged|bl".to_string(),
+    }
+}
+
+fn cmd_watch_history() -> String {
+    let records = match wdb::list_prompt_history(10) {
+        Ok(r) => r,
+        Err(e) => return format!("조회 실패: {e:#}"),
+    };
+    if records.is_empty() {
+        return "호출 이력이 없습니다.".to_string();
+    }
+    let mut msg = format!("📜 최근 Gemini 호출 이력 ({}건)\n", records.len());
+    for r in &records {
+        let tickers_short = truncate_chars_owned(&r.tickers_extracted, 50);
+        msg.push_str(&format!(
+            "\n#{} [{}] {} — {}\n   종목: {}",
+            r.id, r.prompt_type, r.status, r.created_at, tickers_short,
+        ));
+    }
+    msg
+}
+
+// --- 잠금 모드 핸들러 ---
+
+pub async fn handle_locked_command(
+    bot: Bot,
+    msg: Message,
+    cmd: Command,
+    unlock_tx: Arc<tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<crate::config::Config>>>>,
+    boot: BootConfig,
+) -> ResponseResult<()> {
+    let chat_id = msg.chat.id;
+    let user_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
+    let owner_id = boot.telegram.owner_chat_id;
+
+    match cmd {
+        Command::Unlock(passphrase) => {
+            // 메시지 즉시 삭제 (패스프레이즈 노출 방지)
+            let _ = bot.delete_message(chat_id, msg.id).await;
+
+            if owner_id != 0 && user_id != owner_id {
+                bot.send_message(chat_id, "오너만 잠금 해제할 수 있습니다.").await?;
+                return Ok(());
+            }
+
+            let passphrase = passphrase.trim().to_string();
+            if passphrase.is_empty() {
+                bot.send_message(chat_id, "사용법: /unlock [패스프레이즈]").await?;
+                return Ok(());
+            }
+
+            // 복호화 시도
+            match boot.clone().decrypt_into_config(&passphrase) {
+                Ok(config) => {
+                    // 패스프레이즈 저장 (update_config에서 암호화 저장용)
+                    storage::set_passphrase(&passphrase);
+                    // unlock 채널로 config 전송
+                    let mut tx_guard = unlock_tx.lock().await;
+                    if let Some(tx) = tx_guard.take() {
+                        let _ = tx.send(config);
+                        bot.send_message(chat_id, "🔓 잠금 해제 완료!").await?;
+                    } else {
+                        bot.send_message(chat_id, "이미 잠금 해제되었습니다.").await?;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("잠금 해제 실패: {e:#}");
+                    bot.send_message(chat_id, "❌ 패스프레이즈가 틀렸습니다.").await?;
+                }
+            }
+        }
+        Command::Ping => {
+            bot.send_message(chat_id, "pong (🔒 잠금 상태)").await?;
+        }
+        _ => {
+            bot.send_message(chat_id, "🔒 잠금 상태입니다.\n/unlock [패스프레이즈] 로 잠금 해제하세요.").await?;
+        }
+    }
+
+    Ok(())
+}
+
+// --- 암호화 마이그레이션 ---
+
+async fn cmd_encrypt(bot: &Bot, chat_id: ChatId, msg_id: teloxide::types::MessageId, args: &str) -> String {
+    // 패스프레이즈 노출 방지: 메시지 즉시 삭제
+    let _ = bot.delete_message(chat_id, msg_id).await;
+
+    let passphrase = args.trim();
+    if passphrase.is_empty() {
+        return "사용법: /encrypt [패스프레이즈]\n\n\
+                현재 평문 config를 암호화합니다.\n\
+                ⚠️ 패스프레이즈를 분실하면 설정을 복구할 수 없습니다!"
+            .to_string();
+    }
+
+    let config_path = storage::CONFIG_PATH;
+
+    // 현재 config를 암호화하여 저장
+    let result = storage::with_config(|config| {
+        tracing::info!(
+            "encrypt: gemini_api_key={}",
+            if config.secrets.gemini_api_key.is_empty() { "EMPTY" } else { "SET" },
+        );
+        config.save_encrypted(config_path, passphrase)
+    });
+
+    match result {
+        Ok(_) => {
+            // 패스프레이즈 저장 (이후 update_config에서 암호화 저장용)
+            storage::set_passphrase(passphrase);
+            tracing::info!("config 암호화 완료");
+            "✅ 설정 암호화 완료!\n\n\
+             다음 재시작부터 /unlock [패스프레이즈]로 잠금 해제해야 합니다.\n\
+             ⚠️ 패스프레이즈를 안전한 곳에 보관하세요."
+                .to_string()
+        }
+        Err(e) => format!("❌ 암호화 실패: {e:#}"),
+    }
+}
+
 fn parse_condition(cond_type: &str, params: &[&str]) -> Result<Condition, String> {
     let value_str = params.get(0).ok_or("값을 입력하세요.")?;
     let is_percent = value_str.ends_with('%');
@@ -1232,6 +1661,127 @@ fn parse_condition(cond_type: &str, params: &[&str]) -> Result<Condition, String
             "알 수 없는 조건: {cond_type}\n\
              사용 가능: > [가격], < [가격], > [수익률%], < [수익률%]"
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- extract_options ---
+
+    #[test]
+    fn extract_options_account_only() {
+        let parts = vec!["005930", "10", "70000", "@IRP"];
+        let (rest, account, cp) = extract_options(&parts);
+        assert_eq!(rest, vec!["005930", "10", "70000"]);
+        assert_eq!(account, "IRP");
+        assert!(cp.is_none());
+    }
+
+    #[test]
+    fn extract_options_account_and_price() {
+        let parts = vec!["비트코인", "2", "50000000", "@코인", "=55000000"];
+        let (rest, account, cp) = extract_options(&parts);
+        assert_eq!(rest, vec!["비트코인", "2", "50000000"]);
+        assert_eq!(account, "코인");
+        assert_eq!(cp, Some("55000000"));
+    }
+
+    #[test]
+    fn extract_options_reverse_order() {
+        let parts = vec!["=100", "@계좌", "AAPL"];
+        let (rest, account, cp) = extract_options(&parts);
+        assert_eq!(rest, vec!["AAPL"]);
+        assert_eq!(account, "계좌");
+        assert_eq!(cp, Some("100"));
+    }
+
+    #[test]
+    fn extract_options_none() {
+        let parts = vec!["AAPL", "10", "150"];
+        let (rest, account, cp) = extract_options(&parts);
+        assert_eq!(rest, vec!["AAPL", "10", "150"]);
+        assert_eq!(account, "");
+        assert!(cp.is_none());
+    }
+
+    #[test]
+    fn extract_options_empty() {
+        let parts: Vec<&str> = vec![];
+        let (rest, account, cp) = extract_options(&parts);
+        assert!(rest.is_empty());
+        assert_eq!(account, "");
+        assert!(cp.is_none());
+    }
+
+    // --- parse_condition ---
+
+    #[test]
+    fn parse_price_above() {
+        let c = parse_condition(">", &["80000"]).unwrap();
+        assert!(matches!(c, Condition::PriceAbove { target } if target == 80000.0));
+    }
+
+    #[test]
+    fn parse_price_below() {
+        let c = parse_condition("<", &["50000"]).unwrap();
+        assert!(matches!(c, Condition::PriceBelow { target } if target == 50000.0));
+    }
+
+    #[test]
+    fn parse_profit_above() {
+        let c = parse_condition(">", &["10%"]).unwrap();
+        assert!(matches!(c, Condition::ProfitAbove { percentage } if percentage == 10.0));
+    }
+
+    #[test]
+    fn parse_profit_below() {
+        let c = parse_condition("<", &["-5%"]).unwrap();
+        assert!(matches!(c, Condition::ProfitBelow { percentage } if percentage == -5.0));
+    }
+
+    #[test]
+    fn parse_condition_missing_value() {
+        assert!(parse_condition(">", &[]).is_err());
+    }
+
+    #[test]
+    fn parse_condition_invalid_number() {
+        assert!(parse_condition(">", &["abc"]).is_err());
+    }
+
+    #[test]
+    fn parse_condition_unknown_operator() {
+        assert!(parse_condition("==", &["100"]).is_err());
+    }
+
+    // --- account_tag ---
+
+    #[test]
+    fn account_tag_empty() {
+        assert_eq!(account_tag(""), "");
+    }
+
+    #[test]
+    fn account_tag_with_value() {
+        assert_eq!(account_tag("IRP"), " [@IRP]");
+    }
+}
+
+/// UTF-8 안전하게 `max_chars`글자로 자르기 (borrowed)
+fn truncate_chars(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
+    }
+}
+
+/// UTF-8 안전하게 `max_chars`글자로 자르기 (owned, 잘렸으면 "..." 붙임)
+fn truncate_chars_owned(s: &str, max_chars: usize) -> String {
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => format!("{}...", &s[..idx]),
+        None => s.to_string(),
     }
 }
 
