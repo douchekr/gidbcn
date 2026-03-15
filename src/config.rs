@@ -28,8 +28,6 @@ pub struct Secrets {
     #[serde(default)]
     pub kis_expires_at: Option<DateTime<FixedOffset>>,
     pub gemini_api_key: String,
-    #[serde(default)]
-    pub tavily_api_key: String,
 }
 
 fn default_kis_base_url() -> String {
@@ -96,8 +94,6 @@ impl Default for LogConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WatchlistConfig {
-    #[serde(default = "default_gemini_model")]
-    pub gemini_model: String,
     #[serde(default = "default_max_hunt_calls")]
     pub max_hunt_calls_per_day: usize,
     #[serde(default = "default_max_judge_calls")]
@@ -121,7 +117,6 @@ pub struct WatchlistConfig {
 impl Default for WatchlistConfig {
     fn default() -> Self {
         Self {
-            gemini_model: default_gemini_model(),
             max_hunt_calls_per_day: default_max_hunt_calls(),
             max_judge_calls_per_day: default_max_judge_calls(),
             candidate_count: default_candidate_count(),
@@ -135,7 +130,6 @@ impl Default for WatchlistConfig {
     }
 }
 
-fn default_gemini_model() -> String { "gemini-2.5-flash".to_string() }
 fn default_max_hunt_calls() -> usize { 20 }
 fn default_max_judge_calls() -> usize { 14400 }
 fn default_candidate_count() -> usize { 30 }
@@ -299,9 +293,8 @@ impl Config {
     /// 암호화 저장: secrets → encrypted string
     pub fn save_encrypted(&self, path: &str, passphrase: &str) -> Result<()> {
         tracing::debug!(
-            "save_encrypted: gemini_api_key={}, tavily_api_key={}, kis_app_key={}",
+            "save_encrypted: gemini_api_key={}, kis_app_key={}",
             if self.secrets.gemini_api_key.is_empty() { "EMPTY" } else { "SET" },
-            if self.secrets.tavily_api_key.is_empty() { "EMPTY" } else { "SET" },
             if self.secrets.kis_app_key.is_empty() { "EMPTY" } else { "SET" },
         );
         let secrets_json = serde_json::to_string(&self.secrets)?;
@@ -367,7 +360,6 @@ mod tests {
                     &FixedOffset::east_opt(9 * 3600).unwrap(),
                 )),
                 gemini_api_key: "gemini_key_789".to_string(),
-                tavily_api_key: String::new(),
             },
         }
     }
