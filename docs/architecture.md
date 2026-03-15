@@ -75,21 +75,31 @@ pub fn update_config<F>(f: F) -> Result<()> { ... } // 변경 + 파일 저장
 
 ## 스케줄러
 
-`tokio::time::interval` 단일 루프. `tokio-cron-scheduler` 미사용.
+`tokio::time::interval` 기반 `tokio::select!` 루프. `tokio-cron-scheduler` 미사용.
 
 ```rust
-pub async fn run_scheduler(api: ApiHandle, bot: Bot) {
-    let mut signal_tick = interval(signal_interval);  // 기본 5분
+pub async fn run_scheduler(api, bot, discovery_enabled, discovery_trigger) {
+    let mut signal_tick = interval(signal_interval);   // 기본 5분
+    let mut hunt_tick = interval(hunt_interval);       // 기본 30분
+    let mut reeval_tick = interval(Duration::from_secs(60));  // 1분마다 시각 체크
+
     loop {
-        signal_tick.tick().await;
-        if is_market_hours() {
-            for user_id in storage::list_user_ids() {
-                engine::check_all_signals(&api, &bot, user_id).await;
-            }
+        tokio::select! {
+            _ = signal_tick.tick() => { /* 장중이면 시그널 체크 */ }
+            _ = hunt_tick.tick() => { /* 사냥 사이클 */ }
+            _ = discovery_trigger.notified() => { /* /w run 즉시 실행 */ }
+            _ = reeval_tick.tick() => { /* KST 02:00이면 재평가 */ }
         }
     }
 }
 ```
+
+| 작업 | 주기 | 진입 조건 |
+|------|------|-----------|
+| 시그널 체크 | 5분 | `is_market_hours()` |
+| 사냥 사이클 | 30분 | `discovery_enabled && prompts_configured && !hunt_exhausted && !judge_exhausted` |
+| 즉시 실행 | 트리거 | `!hunt_exhausted && !judge_exhausted` |
+| 재평가 | 1분 체크 | `discovery_enabled && prompts_configured && KST 02시 && 오늘 미실행 && !judge_exhausted` |
 
 ### 장시간 판단
 
@@ -372,19 +382,86 @@ Mutex 없이 채널만으로 동시성 확보.
 ## 워치리스트 (US 소형주 디스커버리)
 
 ### 개요
-미국 소형주($10 이하) 관심종목 수집/관리. Gemini AI + 한투 API 2-Track 구조.
+미국 소형주 관심종목 자동 발굴/평가 시스템. Google AI Studio API (Flash Lite + Gemma) + 한투 API 조합.
 
-### 파이프라인
+### 사냥 사이클 (`pipeline::run_cycle`)
+
 ```
-1. 사냥 (Gemini) → 후보 종목 목록
-2. 데이터 수집 (한투 API HHDFS76200200) → 시세/재무 상세
-3. 처단 (Gemini + 실데이터) → 점수(0~100) + 판결
-4. DB 업데이트 (SQLite portfolio.db)
+스케줄러 진입 조건: discovery_enabled && prompts_configured && !hunt_exhausted && !judge_exhausted
+
+0. cleanup_old_data(retention_days)        ← 오래된 DB 레코드 정리
+
+1. 사냥 — gemini::hunt() [Flash Lite, 1콜]
+   ├─ hunt 한도 체크 (max_hunt_calls_per_day)    ← API 호출 직전 본체 체크
+   ├─ 프롬프트 + BL 목록 조합 → Flash Lite API 호출
+   ├─ log_api_call("gemini", "hunt") 기록
+   ├─ JSON 파싱 → HuntResult[] (ticker, market, name, sector, reason)
+   ├─ prompt_history 저장
+   └─ BL 필터링 → candidates(status=pending) 삽입
+
+2. 수집 — 한투 API [N건, 순차]
+   ├─ pending 후보 전부 조회
+   ├─ fetch_detail(ticker, market_hint) → NAS→NYS→AMS 순회
+   ├─ 성공: format_detail_for_gemini() → status=collected + detail_text 저장
+   └─ 실패(3개 거래소 전부): 자동 BL 등록 + status=blacklisted
+
+3. 평가 — gemini::judge() [Gemma, 1콜]
+   ├─ judge 한도 체크 (max_judge_calls_per_day)   ← API 호출 직전 본체 체크
+   ├─ collected 전체의 detail_text 합쳐서 Gemma API 호출
+   ├─ log_api_call("gemini", "judge") 기록
+   ├─ JSON 파싱 → JudgeResult[] (ticker, score, verdict)
+   ├─ score < min_score → BL + status=blacklisted (처단)
+   └─ score >= min_score → status=judged (생존)
+
+4. 도태 — cull_excess_judged(max_survivors)
+   └─ judged 상위 N개만 유지, 나머지 삭제
 ```
+
+### 재평가 사이클 (`pipeline::run_reeval`)
+
+KST 02:00, 하루 1회 자동 실행. 스케줄러 진입 조건: `!judge_exhausted()`
+
+```
+0. reset_judged_for_reeval() → 기존 judged 전부 → pending 리셋
+1. 재수집 (사냥 사이클 2단계와 동일)
+2. 재평가 (사냥 사이클 3단계와 동일)
+3. 도태 (사냥 사이클 4단계와 동일)
+```
+
+### 후보 상태 전이
+
+```
+pending → collected → judged (생존)
+                   → blacklisted (처단: score < min_score)
+pending → blacklisted (수집 실패)
+judged → pending (재평가 리셋) → ...반복
+```
+
+### 한도 체크 구조
+
+API 호출 직전 본체 체크 + 스케줄러 진입 시 사전필터 (이중 체크):
+
+| API | 본체 (gemini.rs) | 사전필터 (scheduler.rs) | 기본 한도 |
+|-----|-----------------|----------------------|-----------|
+| hunt (Flash Lite) | `hunt()` 진입부 | 사냥 사이클 진입 시 | 20/일 |
+| judge (Gemma) | `judge()` 진입부 | 사냥/재평가 사이클 진입 시 | 14,400/일 |
+
+사용량 추적: `api_usage` 테이블에 `log_api_call()` → 성공/실패 구분 없이 전체 카운트.
+리셋: 별도 로직 없음. `called_at LIKE '{today}%'` 날짜 매칭으로 자연 리셋.
+
+### 모델 구성
+
+| 용도 | config 키 | 기본 모델 |
+|------|-----------|-----------|
+| 사냥 | `hunt_model` | gemini-2.5-flash-lite |
+| 평가 | `gemma_model` | gemma-3-27b-it |
+
+둘 다 Google AI Studio API (`generativelanguage.googleapis.com`)를 `gemini_api_key` 하나로 호출.
+Gemini 호출은 API Actor를 거치지 않음 (별도 `reqwest::Client` 직접 사용).
 
 ### 프롬프트 관리
 - **사냥용 (hunt)**: 종목 발굴 기준. 사용자 설정 필수.
-- **처단용 (judge)**: 평가 기준. 사용자 설정 필수.
+- **평가용 (judge)**: 평가 기준. 사용자 설정 필수.
 - 기본 프롬프트 없음 — 미설정 시 디스커버리 불가.
 - DB `prompts` 테이블에 저장, 텔레그램에서 실시간 수정 가능.
 
@@ -392,12 +469,6 @@ Mutex 없이 채널만으로 동시성 확보.
 - **SQLite** (`/opt/kkuepark/gidbcn/portfolio.db`, WAL 모드)
 - `thread_local! RefCell<Option<Connection>>` — LocalSet 덕에 `!Send` OK
 - 테이블: candidates, blacklist, prompts, prompt_history, api_usage, holdings, signals
-
-### Gemini API
-- 모델: gemini-2.5-flash (무료 티어)
-- 제한: 10 RPM, 250 RPD
-- Gemini 호출은 API Actor를 거치지 않음 (별도 reqwest::Client 직접 사용)
-- 한투 API 호출은 기존 API Actor 경유 (rate limit 준수)
 
 ### 한투 API 확장
 - `OverseasDetail` 구조체: 기존 PriceData + 시총, PER, PBR, EPS, BPS, 거래량, 52주고저, 섹터

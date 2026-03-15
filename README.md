@@ -384,20 +384,10 @@ CREATE TABLE signals (
 | `/w hist` | 최근 Gemini 호출 이력 |
 | `/w clear pending\|judged\|bl` | 상태별 일괄 삭제 |
 
-**사냥 사이클** (`/w run` → 30분 주기 자동):
-1. **사냥**: Flash Lite가 프롬프트 기반으로 후보 추천 → pending (hunt 한도 체크 후 API 호출)
-2. **수집**: 한투 API로 1개씩 순차 조회 (라운드로빈) → collected (실패 → 자동 BL)
-3. **평가**: collected 모아서 Gemma 평가 → 점수(0~100) + 판결 (judge 한도 체크 후 API 호출)
-4. **처단**: min_score 미달 → 자동 블랙리스트 + max_survivors 초과 시 하위 도태
-
-**재평가 사이클** (KST 02:00, 하루 1회 자동):
-1. 기존 judged 후보를 pending으로 리셋
-2. 재수집 → 재평가 → 처단/도태 (사냥 사이클의 2~4단계와 동일)
-
+**사냥 파이프라인**: 사냥(Flash Lite) → 수집(한투 API) → 평가(Gemma) → 도태.
+**재평가**: KST 02:00 하루 1회, judged 후보 재수집→재평가→도태.
 프롬프트 미설정 시 `/w run` 불가. hunt/judge 프롬프트를 각각 설정해야 동작.
-SQLite(`portfolio.db`)에 후보, 블랙리스트, 호출 이력 저장.
-retention_days(기본 100일) 초과 데이터 사이클 시작 시 자동 정리.
-한도 체크: 각 API 호출 직전에 해당 한도 체크(본체) + 스케줄러 진입 시 사전필터.
+상세: [docs/architecture.md](docs/architecture.md) → "워치리스트 (US 소형주 디스커버리)"
 
 **watchlist 설정** (config.json):
 | 키 | 기본값 | 설명 |
