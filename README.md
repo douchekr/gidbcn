@@ -396,7 +396,6 @@ retention_days(기본 100일) 초과 데이터 사이클 시작 시 자동 정�
 **watchlist 설정** (config.json):
 | 키 | 기본값 | 설명 |
 |---|---|---|
-| `gemini_model` | gemini-2.5-flash | Gemini 모델 |
 | `hunt_model` | gemini-2.5-flash-lite | 사냥 모델 |
 | `gemma_model` | gemma-3-27b-it | 평가 모델 |
 | `max_hunt_calls_per_day` | 20 | 일일 사냥(Flash Lite) 호출 한도 |
