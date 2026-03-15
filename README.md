@@ -142,7 +142,7 @@ async fn main() {
 
     // 3. 로깅 초기화 (config.log 기준)
     //    - stdout: RUST_LOG 환경변수 기준
-    //    - 파일: config.log.dir/gidbcn.YYYY-MM-DD.log, WARN 이상만, config.log.retain_days일 보관
+    //    - 파일: config.log.dir/gidbcn.YYYY-MM-DD.log, INFO 이상, config.log.retain_days일 보관
 
     // 4. API Actor 채널 생성 + spawn
     let (api_tx, api_rx) = mpsc::channel::<ApiRequest>(32);

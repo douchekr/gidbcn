@@ -206,7 +206,7 @@ fn init_logging(log_config: &config::LogConfig) {
             fmt::layer()
                 .with_ansi(false)
                 .with_writer(non_blocking)
-                .with_filter(LevelFilter::WARN),
+                .with_filter(LevelFilter::INFO),
         )
         .init();
 }
