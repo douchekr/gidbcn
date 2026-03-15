@@ -103,18 +103,12 @@ pub async fn hunt(client: &reqwest::Client) -> Result<Vec<HuntResult>> {
         bail!("오늘 사냥 호출 한도 초과 ({today_calls}/{max_calls})");
     }
 
-    // 블랙리스트
-    let blacklist = db::list_blacklist()?;
-    let bl_tickers: Vec<String> = blacklist.iter().map(|b| b.ticker.clone()).collect();
-
     let full_prompt = format!(
         "{hunt_prompt}\n\n\
          Return exactly {candidate_count} items as a JSON array:\n\
          [{{\"ticker\":\"XXX\",\"market\":\"NAS\",\"name\":\"...\",\"sector\":\"...\",\"reason\":\"...\"}}]\n\
          market: NAS (NASDAQ), NYS (NYSE), AMS (AMEX).\n\
-         No other text, no markdown.\n\n\
-         Exclude these blacklisted tickers: {bl_list}",
-        bl_list = if bl_tickers.is_empty() { "none".to_string() } else { bl_tickers.join(", ") },
+         No other text, no markdown."
     );
 
     let response = call_llm(client, &hunt_model, &full_prompt).await;

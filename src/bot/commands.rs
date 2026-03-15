@@ -1432,7 +1432,7 @@ fn cmd_watch_blacklist(args: &str) -> String {
             }
         }
         _ => {
-            // 블랙리스트 목록 표시
+            // 블랙리스트 개수 + 최근 몇개만
             let list = match wdb::list_blacklist() {
                 Ok(l) => l,
                 Err(e) => return format!("조회 실패: {e:#}"),
@@ -1440,9 +1440,12 @@ fn cmd_watch_blacklist(args: &str) -> String {
             if list.is_empty() {
                 return "블랙리스트가 비어있습니다.".to_string();
             }
-            let mut msg = format!("🚫 블랙리스트 ({}개)\n", list.len());
-            for b in &list {
-                msg.push_str(&format!("\n{} — {}", b.ticker, b.reason));
+            let total = list.len();
+            let show = 10;
+            let mut msg = format!("🚫 블랙리스트 ({total}개)\n\n최근 {show}개:");
+            for b in list.iter().take(show) {
+                let reason = truncate_chars(&b.reason, 30);
+                msg.push_str(&format!("\n{} — {}", b.ticker, reason));
             }
             msg.push_str("\n\n/w bl add [TICKER] [사유]\n/w bl rm [TICKER]");
             msg
