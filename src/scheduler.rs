@@ -46,12 +46,12 @@ pub async fn run_scheduler(
                 }
             }
             _ = hunt_tick.tick() => {
-                if discovery_enabled.load(Ordering::SeqCst) && prompts_configured() && !hunt_exhausted() {
+                if discovery_enabled.load(Ordering::SeqCst) && prompts_configured() && !hunt_exhausted() && !judge_exhausted() {
                     run_hunt_cycle(&api, &bot).await;
                 }
             }
             _ = discovery_trigger.notified() => {
-                if !hunt_exhausted() {
+                if !hunt_exhausted() && !judge_exhausted() {
                     run_hunt_cycle(&api, &bot).await;
                 }
             }
