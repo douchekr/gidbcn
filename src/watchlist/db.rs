@@ -572,9 +572,9 @@ pub fn cleanup_old_data(retention_days: u32) -> Result<usize> {
 
         let mut total = 0usize;
 
-        // judged/blacklisted candidates
+        // 오래된 candidates (상태 무관)
         let n = conn.execute(
-            "DELETE FROM candidates WHERE status IN ('judged', 'blacklisted') AND created_at < ?1",
+            "DELETE FROM candidates WHERE created_at < ?1",
             params![cutoff],
         )?;
         total += n;
