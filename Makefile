@@ -51,9 +51,10 @@ deploy: build-pi
 build-oci:
 	cargo build --release
 
-# 빌드 후 OCI 배포
+# 빌드 후 OCI 배포 + 서비스 재시작
 deploy-oci: build-oci
 	scp target/release/$(BINARY) $(OCI_HOST):$(OCI_PATH)
+	ssh $(OCI_HOST) "systemctl --user restart gidbcn"
 	@echo "배포 완료: $(OCI_HOST):$(OCI_PATH)"
 
 # 크로스컴파일 사전 요구사항 안내
