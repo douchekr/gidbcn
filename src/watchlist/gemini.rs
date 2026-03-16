@@ -69,8 +69,9 @@ async fn call_llm(client: &reqwest::Client, model: &str, prompt: &str) -> Result
     // 429 분당 한도(TPM/RPM) 초과 시 retryDelay만큼 대기 후 1회 재시도
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
         if let Some(delay) = parse_retry_delay(&text) {
-            tracing::info!("모델 {model} 429 — {delay}초 대기 후 재시도");
-            tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+            let wait = delay + 5; // 여유 마진
+            tracing::info!("모델 {model} 429 — {wait}초 대기 후 재시도 (retryDelay: {delay}s +5s)");
+            tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
 
             let resp2 = client
                 .post(&url)
