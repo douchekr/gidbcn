@@ -124,6 +124,26 @@ pub async fn handle_command(
         }
     }
 
+    // /w export: CSV 파일로 전송
+    if let Command::Watch(ref args) | Command::W(ref args) = cmd {
+        let parts: Vec<&str> = args.split_whitespace().collect();
+        if parts.first().copied() == Some("export") || parts.first().copied() == Some("ex") {
+            if !is_owner {
+                bot.send_message(chat_id, "이 명령어는 봇 오너만 사용할 수 있습니다.").await?;
+                return Ok(());
+            }
+            let csv = cmd_watch_export();
+            if csv.starts_with('\u{FEFF}') {
+                let fname = chrono::Local::now().format("watchlist_%Y%m%d_%H%M.csv").to_string();
+                let file = InputFile::memory(csv.into_bytes()).file_name(fname);
+                bot.send_document(chat_id, file).await?;
+            } else {
+                bot.send_message(chat_id, csv).await?;
+            }
+            return Ok(());
+        }
+    }
+
     let reply = match cmd {
         Command::Start | Command::Help => help_text(),
         Command::Ping => "pong".to_string(),
@@ -1316,6 +1336,7 @@ async fn cmd_watchlist(
         "list" | "ls" => cmd_watch_list(),
         "pending" => cmd_watch_pending(),
         "info" | "i" => cmd_watch_info(&rest.to_uppercase()),
+        "export" | "ex" => cmd_watch_export(),
         "blacklist" | "bl" => cmd_watch_blacklist(&rest),
         "budget" => cmd_watch_budget(),
         "prompt" => cmd_watch_prompt(&rest),
@@ -1325,6 +1346,7 @@ async fn cmd_watchlist(
               /w run — 사냥 시작 (사냥/수집/평가 자동)\n\
               /w stop — 사냥 중지\n\
               /w ls — 평가 완료 종목 (점수순)\n\
+              /w export — CSV 내보내기\n\
               /w pending — 대기 중 후보\n\
               /w info [TICKER] — 종목 상세\n\
               /w bl — 블랙리스트\n\
@@ -1349,7 +1371,12 @@ fn cmd_watch_list() -> String {
     if candidates.is_empty() {
         return "평가된 종목이 없습니다. /w run 으로 디스커버리를 실행하세요.".to_string();
     }
-    let mut msg = format!("⚖️ 평가 완료 ({})개\n", candidates.len());
+    let total = candidates.len();
+    let mut msg = if total > 30 {
+        format!("⚖️ 평가 완료 ({total})개 — 점수순 상위 30개\n")
+    } else {
+        format!("⚖️ 평가 완료 ({total})개\n")
+    };
     for (i, c) in candidates.iter().enumerate().take(30) {
         let score = c.score.map_or("-".to_string(), |s| format!("{s:.0}"));
         let reason_short = truncate_chars(&c.reason, 40);
@@ -1359,6 +1386,31 @@ fn cmd_watch_list() -> String {
         ));
     }
     msg
+}
+
+fn cmd_watch_export() -> String {
+    use crate::watchlist::models::CandidateStatus;
+    let candidates = match wdb::list_candidates(Some(CandidateStatus::Judged)) {
+        Ok(c) => c,
+        Err(e) => return format!("조회 실패: {e:#}"),
+    };
+    if candidates.is_empty() {
+        return "평가된 종목이 없습니다.".to_string();
+    }
+    let mut lines = vec!["ticker,market,name,sector,score,reason,verdict".to_string()];
+    for c in &candidates {
+        let score = c.score.map_or(String::new(), |s| format!("{s:.0}"));
+        let verdict = c.verdict.as_deref().unwrap_or("");
+        lines.push(format!(
+            "{},{},{},\"{}\",{},\"{}\",\"{}\"",
+            c.ticker, c.market, c.name,
+            c.sector.replace('"', "\"\""),
+            score,
+            c.reason.replace('"', "\"\""),
+            verdict.replace('"', "\"\""),
+        ));
+    }
+    format!("\u{FEFF}{}\n", lines.join("\n"))
 }
 
 fn cmd_watch_pending() -> String {
