@@ -392,8 +392,8 @@ CREATE TABLE signals (
 **watchlist 설정** (config.json):
 | 키 | 기본값 | 설명 |
 |---|---|---|
-| `hunt_model` | gemini-2.5-flash-lite | 사냥 모델 |
-| `gemma_model` | gemma-3-27b-it | 평가 모델 |
+| `hunt_models` | ["gemini-2.5-flash-lite"] | 사냥 모델 (배열, 폴백 순서) |
+| `judge_models` | ["gemma-3-27b-it"] | 평가 모델 (배열, 폴백 순서) |
 | `max_hunt_calls_per_day` | 20 | 일일 사냥(Flash Lite) 호출 한도 |
 | `max_judge_calls_per_day` | 14400 | 일일 평가(Gemma) 호출 한도 |
 | `max_survivors` | 50 | 도태 후 생존 상한 |

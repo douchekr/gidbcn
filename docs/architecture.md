@@ -451,10 +451,12 @@ API 호출 직전 본체 체크 + 스케줄러 진입 시 사전필터 (이중 �
 
 ### 모델 구성
 
-| 용도 | config 키 | 기본 모델 |
-|------|-----------|-----------|
-| 사냥 | `hunt_model` | gemini-2.5-flash-lite |
-| 평가 | `gemma_model` | gemma-3-27b-it |
+| 용도 | config 키 | 기본값 | 비고 |
+|------|-----------|--------|------|
+| 사냥 | `hunt_models` | ["gemini-2.5-flash-lite"] | 배열 순서대로 폴백 |
+| 평가 | `judge_models` | ["gemma-3-27b-it"] | 배열 순서대로 폴백 |
+
+API 호출 실패 시 다음 모델로 자동 폴백. 당일 성공한 모델을 우선 사용하며 다음날 리셋.
 
 둘 다 Google AI Studio API (`generativelanguage.googleapis.com`)를 `gemini_api_key` 하나로 호출.
 Gemini 호출은 API Actor를 거치지 않음 (별도 `reqwest::Client` 직접 사용).

@@ -1,11 +1,45 @@
+use std::cell::RefCell;
+
 use anyhow::{bail, Context, Result};
+use chrono::Datelike;
 use serde_json::Value;
 
 use super::db;
 use super::models::{HuntResult, JudgeResult, PromptType};
 use crate::storage;
 
-/// Google AI Studio LLM 호출 (Gemini / Gemma 공용)
+// 당일 성공 모델 캐시: (ordinal day, 모델명)
+thread_local! {
+    static MODEL_CACHE: RefCell<[Option<(u32, String)>; 2]> = RefCell::new([None, None]);
+}
+
+const CACHE_HUNT: usize = 0;
+const CACHE_JUDGE: usize = 1;
+
+/// 당일 성공 모델이 있으면 리스트 맨 앞으로 올림
+fn prioritize_models(models: &[String], cache_idx: usize) -> Vec<String> {
+    let today = chrono::Local::now().ordinal();
+    MODEL_CACHE.with(|c| {
+        let cache = c.borrow();
+        if let Some((day, ref model)) = cache[cache_idx] {
+            if day == today && models.contains(model) {
+                let mut result = vec![model.clone()];
+                result.extend(models.iter().filter(|m| *m != model).cloned());
+                return result;
+            }
+        }
+        models.to_vec()
+    })
+}
+
+fn remember_model(cache_idx: usize, model: &str) {
+    let today = chrono::Local::now().ordinal();
+    MODEL_CACHE.with(|c| {
+        c.borrow_mut()[cache_idx] = Some((today, model.to_string()));
+    });
+}
+
+/// Google AI Studio LLM 단일 모델 호출
 async fn call_llm(client: &reqwest::Client, model: &str, prompt: &str) -> Result<String> {
     let api_key = storage::with_config(|c| c.secrets.gemini_api_key.clone());
 
@@ -37,6 +71,32 @@ async fn call_llm(client: &reqwest::Client, model: &str, prompt: &str) -> Result
     }
 
     extract_gemini_text(&text)
+}
+
+/// 모델 리스트 순회 폴백 — 성공하면 해당 모델 기억, 전부 실패 시 마지막 에러 반환
+async fn call_llm_with_fallback(
+    client: &reqwest::Client,
+    models: &[String],
+    prompt: &str,
+    cache_idx: usize,
+) -> Result<(String, String)> {
+    let ordered = prioritize_models(models, cache_idx);
+    let mut last_err = None;
+
+    for model in &ordered {
+        match call_llm(client, model, prompt).await {
+            Ok(text) => {
+                remember_model(cache_idx, model);
+                return Ok((text, model.clone()));
+            }
+            Err(e) => {
+                tracing::warn!("모델 {model} 실패: {e:#}, 다음 모델 시도");
+                last_err = Some(e);
+            }
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("모델 리스트가 비어있습니다")))
 }
 
 /// Gemini API 응답 JSON에서 텍스트 추출
@@ -92,8 +152,8 @@ pub async fn hunt(client: &reqwest::Client) -> Result<Vec<HuntResult>> {
     let hunt_prompt = db::get_prompt(PromptType::Hunt)?
         .context("사냥 프롬프트가 설정되지 않았습니다. /w prompt hunt set 으로 설정하세요")?;
 
-    let (hunt_model, candidate_count) = storage::with_config(|c| {
-        (c.watchlist.hunt_model.clone(), c.watchlist.candidate_count)
+    let (hunt_models, candidate_count) = storage::with_config(|c| {
+        (c.watchlist.hunt_models.clone(), c.watchlist.candidate_count)
     });
 
     // 일일 사냥 호출 제한 체크
@@ -114,12 +174,12 @@ pub async fn hunt(client: &reqwest::Client) -> Result<Vec<HuntResult>> {
          - market: NAS (NASDAQ), NYS (NYSE), AMS (AMEX)"
     );
 
-    let response = call_llm(client, &hunt_model, &full_prompt).await;
+    let response = call_llm_with_fallback(client, &hunt_models, &full_prompt, CACHE_HUNT).await;
 
     // API 사용 로그
     let _ = db::log_api_call("gemini", "hunt", response.is_ok());
 
-    let response_text = response?;
+    let (response_text, hunt_model) = response?;
 
     // JSON 파싱
     let parsed = extract_json_array(&response_text);
@@ -171,7 +231,7 @@ pub async fn judge(
     let judge_prompt = db::get_prompt(PromptType::Judge)?
         .context("평가(judge) 프롬프트가 설정되지 않았습니다. /w prompt judge set 으로 설정하세요")?;
 
-    let gemma_model = storage::with_config(|c| c.watchlist.gemma_model.clone());
+    let judge_models = storage::with_config(|c| c.watchlist.judge_models.clone());
 
     // 일일 평가 호출 제한 체크
     let max_calls = storage::with_config(|c| c.watchlist.max_judge_calls_per_day);
@@ -194,12 +254,12 @@ pub async fn judge(
          - verdict: brief explanation"
     );
 
-    // Gemma 호출
-    let response = call_llm(client, &gemma_model, &full_prompt).await;
+    // 평가 모델 호출 (폴백)
+    let response = call_llm_with_fallback(client, &judge_models, &full_prompt, CACHE_JUDGE).await;
 
     let _ = db::log_api_call("gemini", "judge", response.is_ok());
 
-    let response_text = response?;
+    let (response_text, judge_model) = response?;
 
     let parsed = extract_json_array(&response_text);
     let tickers_str: String;
@@ -212,14 +272,14 @@ pub async fn judge(
         }
         Err(e) => {
             let _ = db::insert_prompt_history(
-                PromptType::Judge, &full_prompt, &response_text, &gemma_model, "", "parse_error",
+                PromptType::Judge, &full_prompt, &response_text, &judge_model, "", "parse_error",
             );
             bail!("평가 결과 파싱 실패: {e}");
         }
     }
 
     let _ = db::insert_prompt_history(
-        PromptType::Judge, &full_prompt, &response_text, &gemma_model, &tickers_str, "success",
+        PromptType::Judge, &full_prompt, &response_text, &judge_model, &tickers_str, "success",
     );
 
     tracing::info!("평가 완료: {}개 종목", results.len());

@@ -12,8 +12,8 @@
     "retain_days": 7
   },
   "watchlist": {
-    "hunt_model": "gemini-2.5-flash-lite",
-    "gemma_model": "gemma-3-27b-it",
+    "hunt_models": ["gemini-2.5-flash-lite"],
+    "judge_models": ["gemma-3-27b-it"],
     "max_hunt_calls_per_day": 20,
     "max_judge_calls_per_day": 14400,
     "max_survivors": 50,

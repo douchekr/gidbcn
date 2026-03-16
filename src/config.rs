@@ -106,10 +106,10 @@ pub struct WatchlistConfig {
     pub min_score: f64,
     #[serde(default = "default_retention_days")]
     pub retention_days: u32,
-    #[serde(default = "default_gemma_model")]
-    pub gemma_model: String,
-    #[serde(default = "default_hunt_model")]
-    pub hunt_model: String,
+    #[serde(default = "default_judge_models")]
+    pub judge_models: Vec<String>,
+    #[serde(default = "default_hunt_models")]
+    pub hunt_models: Vec<String>,
     #[serde(default = "default_max_survivors")]
     pub max_survivors: usize,
 }
@@ -123,8 +123,8 @@ impl Default for WatchlistConfig {
             hunt_interval_minutes: default_hunt_interval(),
             min_score: default_min_score(),
             retention_days: default_retention_days(),
-            gemma_model: default_gemma_model(),
-            hunt_model: default_hunt_model(),
+            judge_models: default_judge_models(),
+            hunt_models: default_hunt_models(),
             max_survivors: default_max_survivors(),
         }
     }
@@ -136,8 +136,12 @@ fn default_candidate_count() -> usize { 30 }
 fn default_hunt_interval() -> u64 { 30 }
 fn default_min_score() -> f64 { 60.0 }
 fn default_retention_days() -> u32 { 100 }
-fn default_gemma_model() -> String { "gemma-3-27b-it".to_string() }
-fn default_hunt_model() -> String { "gemini-2.5-flash-lite".to_string() }
+fn default_judge_models() -> Vec<String> {
+    vec!["gemma-3-27b-it".to_string()]
+}
+fn default_hunt_models() -> Vec<String> {
+    vec!["gemini-2.5-flash-lite".to_string()]
+}
 fn default_max_survivors() -> usize { 50 }
 
 // --- 디스크 포맷: BootConfig ---
