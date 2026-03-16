@@ -206,9 +206,12 @@ pub async fn run_reeval(
     let reset_count = db::reset_judged_for_reeval()?;
     report.target = reset_count + revived;
 
-    if reset_count == 0 {
+    // 잔류 collected 체크 (이전 재평가 실패로 방치된 것)
+    let stale_collected = db::count_candidates_by_status(CandidateStatus::Collected)?;
+    if reset_count == 0 && revived == 0 && stale_collected == 0 {
         return Ok(report);
     }
+    report.target += stale_collected;
 
     // 수집
     let pending = db::list_candidates(Some(CandidateStatus::Pending))
@@ -235,7 +238,7 @@ pub async fn run_reeval(
         }
     }
 
-    // 평가
+    // 평가 (배치 분할 — TPM 한도 회피)
     let collected = db::list_candidates(Some(CandidateStatus::Collected))
         .context("재평가 collected 조회 실패")?;
 
@@ -243,32 +246,44 @@ pub async fn run_reeval(
         return Ok(report);
     }
 
-    let combined_data: String = collected.iter()
-        .map(|c| c.detail_text.as_str())
-        .collect::<Vec<_>>()
-        .join("\n---\n");
-
-    let judge_results = gemini::judge(http_client, &combined_data).await
-        .context("재평가 실패")?;
-
-    let (min_score, hunt_weight) = crate::storage::with_config(|c| {
-        (c.watchlist.min_score, c.watchlist.hunt_weight)
+    let (min_score, hunt_weight, batch_size) = crate::storage::with_config(|c| {
+        (c.watchlist.min_score, c.watchlist.hunt_weight, c.watchlist.candidate_count)
     });
 
-    for jr in &judge_results {
-        let ticker = jr.ticker.to_uppercase();
-        if let Some(candidate) = collected.iter().find(|c| c.ticker == ticker) {
-            let hunt_s = candidate.hunt_score.unwrap_or(0.0);
-            let final_score = hunt_s * hunt_weight + jr.score * (1.0 - hunt_weight);
-            if let Err(e) = db::update_candidate_judge(candidate.id, final_score, &jr.verdict) {
-                tracing::error!("{ticker} 재평가 DB 업데이트 실패: {e:#}");
-            } else if final_score < min_score {
-                let reason = format!("재평가 처단: {:.0}점 < 기준 {:.0}점", final_score, min_score);
-                let _ = db::add_blacklist(&ticker, &reason);
-                let _ = db::update_candidate_status(candidate.id, CandidateStatus::Blacklisted);
-                report.culled += 1;
-            } else {
-                report.survived += 1;
+    for (i, chunk) in collected.chunks(batch_size).enumerate() {
+        if i > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        }
+
+        let combined_data: String = chunk.iter()
+            .map(|c| c.detail_text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n---\n");
+
+        let judge_results = match gemini::judge(http_client, &combined_data).await {
+            Ok(results) => results,
+            Err(e) => {
+                tracing::warn!("재평가 배치 {}/{} 실패 ({}개): {e:#}",
+                    i + 1, collected.chunks(batch_size).len(), chunk.len());
+                continue;
+            }
+        };
+
+        for jr in &judge_results {
+            let ticker = jr.ticker.to_uppercase();
+            if let Some(candidate) = chunk.iter().find(|c| c.ticker == ticker) {
+                let hunt_s = candidate.hunt_score.unwrap_or(0.0);
+                let final_score = hunt_s * hunt_weight + jr.score * (1.0 - hunt_weight);
+                if let Err(e) = db::update_candidate_judge(candidate.id, final_score, &jr.verdict) {
+                    tracing::error!("{ticker} 재평가 DB 업데이트 실패: {e:#}");
+                } else if final_score < min_score {
+                    let reason = format!("재평가 처단: {:.0}점 < 기준 {:.0}점", final_score, min_score);
+                    let _ = db::add_blacklist(&ticker, &reason);
+                    let _ = db::update_candidate_status(candidate.id, CandidateStatus::Blacklisted);
+                    report.culled += 1;
+                } else {
+                    report.survived += 1;
+                }
             }
         }
     }

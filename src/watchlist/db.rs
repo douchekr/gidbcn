@@ -423,6 +423,17 @@ pub fn judge_calls_today() -> Result<usize> {
     })
 }
 
+pub fn count_candidates_by_status(status: CandidateStatus) -> Result<usize> {
+    with_db(|conn| {
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM candidates WHERE status = ?1",
+            params![status.as_str()],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    })
+}
+
 // --- 일괄 삭제 ---
 
 pub fn clear_candidates_by_status(status: CandidateStatus) -> Result<usize> {
