@@ -417,6 +417,25 @@ Mutex 없이 채널만으로 동시성 확보.
    └─ judged 상위 N개만 유지, 나머지 삭제
 ```
 
+### 점수 계산
+
+2단계 가중 합산: hunt(1차 인상평 점수) + judge(시장 데이터 기반 점수)
+
+```
+최종 score = (hunt_score × hunt_weight + judge_score) / (hunt_weight + 1)
+```
+
+| hunt_weight | 비율 | 설명 |
+|---|---|---|
+| 0.0 | hunt 0% : judge 100% | judge만 반영 (기존 동작) |
+| 0.5 | hunt 33% : judge 67% | judge 비중 높음 |
+| 1.0 | hunt 50% : judge 50% | 동등 (기본값) |
+| 2.0 | hunt 67% : judge 33% | hunt 비중 높음 |
+
+- `hunt_score`: 사냥 시 LLM이 프롬프트 기준으로 매긴 확신도 (0–100)
+- `judge_score`: 수집된 시장 데이터(PER, PBR, EPS 등) 기반 평가 (0–100)
+- `min_score` 비교는 최종 score 기준
+
 ### 재평가 사이클 (`pipeline::run_reeval`)
 
 KST 02:00, 하루 1회 자동 실행. 스케줄러 진입 조건: `!judge_exhausted()`

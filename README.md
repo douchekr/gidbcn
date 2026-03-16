@@ -397,6 +397,7 @@ CREATE TABLE signals (
 | `max_hunt_calls_per_day` | 20 | 일일 사냥(Flash Lite) 호출 한도 |
 | `max_judge_calls_per_day` | 14400 | 일일 평가(Gemma) 호출 한도 |
 | `max_survivors` | 50 | 도태 후 생존 상한 |
+| `hunt_weight` | 1.0 | hunt 점수 가중치 (1.0=동등, 0=judge만) |
 | `candidate_count` | 30 | 사냥당 후보 수 |
 | `hunt_interval_minutes` | 30 | 사냥 주기 (분) |
 | `min_score` | 60.0 | 처단 기준 점수 |
