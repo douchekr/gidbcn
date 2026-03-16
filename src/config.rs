@@ -146,7 +146,7 @@ fn default_hunt_models() -> Vec<String> {
     vec!["gemini-2.5-flash-lite".to_string()]
 }
 fn default_max_survivors() -> usize { 50 }
-fn default_hunt_weight() -> f64 { 1.0 }
+fn default_hunt_weight() -> f64 { 0.5 }
 
 // --- 디스크 포맷: BootConfig ---
 // secrets 필드가 object면 평문, string이면 암호화

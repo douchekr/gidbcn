@@ -156,7 +156,7 @@ pub async fn run_cycle(
         let ticker = jr.ticker.to_uppercase();
         if let Some(candidate) = collected.iter().find(|c| c.ticker == ticker) {
             let hunt_s = candidate.hunt_score.unwrap_or(0.0);
-            let final_score = (hunt_s * hunt_weight + jr.score) / (hunt_weight + 1.0);
+            let final_score = hunt_s * hunt_weight + jr.score * (1.0 - hunt_weight);
             if let Err(e) = db::update_candidate_judge(candidate.id, final_score, &jr.verdict) {
                 tracing::error!("{ticker} DB 업데이트 실패: {e:#}");
             } else if final_score < min_score {
@@ -259,7 +259,7 @@ pub async fn run_reeval(
         let ticker = jr.ticker.to_uppercase();
         if let Some(candidate) = collected.iter().find(|c| c.ticker == ticker) {
             let hunt_s = candidate.hunt_score.unwrap_or(0.0);
-            let final_score = (hunt_s * hunt_weight + jr.score) / (hunt_weight + 1.0);
+            let final_score = hunt_s * hunt_weight + jr.score * (1.0 - hunt_weight);
             if let Err(e) = db::update_candidate_judge(candidate.id, final_score, &jr.verdict) {
                 tracing::error!("{ticker} 재평가 DB 업데이트 실패: {e:#}");
             } else if final_score < min_score {

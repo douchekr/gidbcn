@@ -422,15 +422,16 @@ Mutex 없이 채널만으로 동시성 확보.
 2단계 가중 합산: hunt(1차 인상평 점수) + judge(시장 데이터 기반 점수)
 
 ```
-최종 score = (hunt_score × hunt_weight + judge_score) / (hunt_weight + 1)
+최종 score = hunt_score × w + judge_score × (1 - w)    (w = hunt_weight, 0.0~1.0)
 ```
 
 | hunt_weight | 비율 | 설명 |
 |---|---|---|
-| 0.0 | hunt 0% : judge 100% | judge만 반영 (기존 동작) |
-| 0.5 | hunt 33% : judge 67% | judge 비중 높음 |
-| 1.0 | hunt 50% : judge 50% | 동등 (기본값) |
-| 2.0 | hunt 67% : judge 33% | hunt 비중 높음 |
+| 0.0 | hunt 0% : judge 100% | judge만 반영 |
+| 0.3 | hunt 30% : judge 70% | judge 비중 높음 |
+| 0.5 | hunt 50% : judge 50% | 동등 (기본값) |
+| 0.7 | hunt 70% : judge 30% | hunt 비중 높음 |
+| 1.0 | hunt 100% : judge 0% | hunt만 반영 |
 
 - `hunt_score`: 사냥 시 LLM이 프롬프트 기준으로 매긴 확신도 (0–100)
 - `judge_score`: 수집된 시장 데이터(PER, PBR, EPS 등) 기반 평가 (0–100)

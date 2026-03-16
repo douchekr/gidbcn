@@ -134,7 +134,7 @@ Return a JSON array with your evaluation:
     text = call_llm(api_key, JUDGE_MODEL, prompt)
     results = parse_json_array(text)
 
-    hunt_weight = 1.0  # config의 hunt_weight와 동일
+    hunt_weight = 0.5  # config의 hunt_weight와 동일
     print(f"  평가 결과: {len(results)}개 (hunt_weight={hunt_weight})")
     min_score = 60.0
     survived = 0
@@ -147,7 +147,7 @@ Return a JSON array with your evaluation:
         ticker = r.get("ticker", "?").upper()
         judge_score = r.get("score", 0)
         hunt_s = hunt_scores.get(ticker, 0)
-        final_score = (hunt_s * hunt_weight + judge_score) / (hunt_weight + 1.0)
+        final_score = hunt_s * hunt_weight + judge_score * (1.0 - hunt_weight)
         verdict = r.get("verdict", "")[:50]
         status = f"{GREEN}생존{RESET}" if final_score >= min_score else f"{RED}처단{RESET}"
         if final_score >= min_score:
