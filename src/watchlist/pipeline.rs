@@ -186,15 +186,21 @@ pub async fn run_reeval(
 ) -> Result<RevalReport> {
     let mut report = RevalReport {
         target: 0,
+        revived: 0,
         collected: 0,
         survived: 0,
         culled: 0,
         collect_failed: 0,
     };
 
+    // 패자 부활 (재평가 전에 BL에서 복귀)
+    let min_score = crate::storage::with_config(|c| c.watchlist.min_score);
+    let revived = db::revive_near_misses(min_score).unwrap_or(0);
+    report.revived = revived;
+
     // judged → pending 리셋 (재수집 대상으로)
     let reset_count = db::reset_judged_for_reeval()?;
-    report.target = reset_count;
+    report.target = reset_count + revived;
 
     if reset_count == 0 {
         return Ok(report);
@@ -275,6 +281,7 @@ pub async fn run_reeval(
 /// 재평가 사이클 결과
 pub struct RevalReport {
     pub target: usize,
+    pub revived: usize,
     pub collected: usize,
     pub survived: usize,
     pub culled: usize,
@@ -284,8 +291,9 @@ pub struct RevalReport {
 impl RevalReport {
     pub fn summary(&self) -> String {
         let err = if self.collect_failed == 0 { String::new() } else { format!(" ❗{}", self.collect_failed) };
+        let rev = if self.revived == 0 { String::new() } else { format!(" 🔁{}부활", self.revived) };
         format!(
-            "🔄 재평가완료 ({}대상 → ✅{}생존 ⚖️{}처단{})",
+            "🔄 재평가완료 ({}대상{rev} → ✅{}생존 ⚖️{}처단{})",
             self.target, self.survived, self.culled, err,
         )
     }
@@ -346,7 +354,7 @@ mod tests {
     #[test]
     fn reeval_report_summary() {
         let report = RevalReport {
-            target: 50, collected: 45, survived: 30, culled: 15, collect_failed: 5,
+            target: 50, revived: 0, collected: 45, survived: 30, culled: 15, collect_failed: 5,
         };
         let summary = report.summary();
         assert!(summary.contains("재평가완료"));
@@ -359,7 +367,7 @@ mod tests {
     #[test]
     fn reeval_report_no_errors() {
         let report = RevalReport {
-            target: 10, collected: 10, survived: 8, culled: 2, collect_failed: 0,
+            target: 10, revived: 0, collected: 10, survived: 8, culled: 2, collect_failed: 0,
         };
         let summary = report.summary();
         assert!(!summary.contains("❗"));
@@ -368,7 +376,7 @@ mod tests {
     #[test]
     fn reeval_report_zero_target() {
         let report = RevalReport {
-            target: 0, collected: 0, survived: 0, culled: 0, collect_failed: 0,
+            target: 0, revived: 0, collected: 0, survived: 0, culled: 0, collect_failed: 0,
         };
         let summary = report.summary();
         assert!(summary.contains("0대상"));

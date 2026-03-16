@@ -422,10 +422,14 @@ Mutex 없이 채널만으로 동시성 확보.
 KST 02:00, 하루 1회 자동 실행. 스케줄러 진입 조건: `!judge_exhausted()`
 
 ```
-0. reset_judged_for_reeval() → 기존 judged 전부 → pending 리셋
-1. 재수집 (사냥 사이클 2단계와 동일)
-2. 재평가 (사냥 사이클 3단계와 동일)
-3. 도태 (사냥 사이클 4단계와 동일)
+0. revive_near_misses() → 패자 부활 (점수 아깝게 떨어진 BL → pending 복귀)
+   - 부활 조건: score >= min_score * 0.9 AND strike_count < 3
+   - 부활 시 BL 삭제 + candidate pending 리셋
+   - API 조회 실패 BL / 수동 BL은 부활 불가 (score 없음)
+1. reset_judged_for_reeval() → 기존 judged 전부 → pending 리셋
+2. 재수집 (사냥 사이클 2단계와 동일)
+3. 재평가 (사냥 사이클 3단계와 동일)
+4. 도태 (사냥 사이클 4단계와 동일)
 ```
 
 ### 후보 상태 전이
@@ -433,8 +437,9 @@ KST 02:00, 하루 1회 자동 실행. 스케줄러 진입 조건: `!judge_exhaus
 ```
 pending → collected → judged (생존)
                    → blacklisted (처단: score < min_score)
-pending → blacklisted (수집 실패)
+pending → blacklisted (수집 실패 → 영구 BL)
 judged → pending (재평가 리셋) → ...반복
+blacklisted → pending (패자 부활: score >= min_score*0.9 && strike < 3)
 ```
 
 ### 한도 체크 구조

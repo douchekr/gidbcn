@@ -39,10 +39,11 @@ pub fn init_db() -> Result<()> {
         );
 
         CREATE TABLE IF NOT EXISTS blacklist (
-            id       INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker   TEXT NOT NULL UNIQUE,
-            reason   TEXT NOT NULL DEFAULT '',
-            added_at TEXT NOT NULL
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker       TEXT NOT NULL UNIQUE,
+            reason       TEXT NOT NULL DEFAULT '',
+            added_at     TEXT NOT NULL,
+            strike_count INTEGER NOT NULL DEFAULT 1
         );
 
         CREATE TABLE IF NOT EXISTS prompts (
@@ -107,6 +108,7 @@ pub fn init_db() -> Result<()> {
     // 기존 DB 마이그레이션
     let _ = conn.execute("ALTER TABLE candidates ADD COLUMN detail_text TEXT NOT NULL DEFAULT ''", []);
     let _ = conn.execute("ALTER TABLE candidates ADD COLUMN market TEXT NOT NULL DEFAULT ''", []);
+    let _ = conn.execute("ALTER TABLE blacklist ADD COLUMN strike_count INTEGER NOT NULL DEFAULT 1", []);
 
     DB_CONN.with(|c| *c.borrow_mut() = Some(conn));
     tracing::info!("watchlist DB initialized: {DB_PATH}");
@@ -252,7 +254,12 @@ pub fn add_blacklist(ticker: &str, reason: &str) -> Result<()> {
     with_db(|conn| {
         let now = now_iso();
         conn.execute(
-            "INSERT OR REPLACE INTO blacklist (ticker, reason, added_at) VALUES (?1, ?2, ?3)",
+            "INSERT INTO blacklist (ticker, reason, added_at, strike_count)
+             VALUES (?1, ?2, ?3, 1)
+             ON CONFLICT(ticker) DO UPDATE SET
+               reason = excluded.reason,
+               added_at = excluded.added_at,
+               strike_count = strike_count + 1",
             params![ticker, reason, now],
         )?;
         Ok(())
@@ -453,7 +460,12 @@ pub fn cull_excess_judged(max_survivors: usize) -> Result<usize> {
         for (id, ticker, score) in &victims {
             let reason = format!("도태: {:.0}점 (상위 {max_survivors}위 밖)", score);
             conn.execute(
-                "INSERT OR REPLACE INTO blacklist (ticker, reason, added_at) VALUES (?1, ?2, ?3)",
+                "INSERT INTO blacklist (ticker, reason, added_at, strike_count)
+                 VALUES (?1, ?2, ?3, 1)
+                 ON CONFLICT(ticker) DO UPDATE SET
+                   reason = excluded.reason,
+                   added_at = excluded.added_at,
+                   strike_count = strike_count + 1",
                 params![ticker, reason, now],
             )?;
             conn.execute(
@@ -478,6 +490,39 @@ pub fn reset_judged_for_reeval() -> Result<usize> {
             [],
         )?;
         Ok(n)
+    })
+}
+
+/// 패자 부활: 점수 아깝게 떨어진 BL 후보를 pending으로 복귀 (삼진아웃 제외)
+pub fn revive_near_misses(min_score: f64) -> Result<usize> {
+    let threshold = min_score * 0.9;
+    with_db(|conn| {
+        // candidates에서 blacklisted + score 있고 + threshold 이상인 ticker 조회
+        let mut stmt = conn.prepare(
+            "SELECT c.id, c.ticker FROM candidates c
+             INNER JOIN blacklist b ON c.ticker = b.ticker
+             WHERE c.status = 'blacklisted'
+               AND c.score IS NOT NULL
+               AND c.score >= ?1
+               AND b.strike_count < 3",
+        )?;
+        let targets: Vec<(i64, String)> = stmt
+            .query_map(params![threshold], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        for (id, ticker) in &targets {
+            conn.execute(
+                "UPDATE candidates SET status = 'pending', detail_text = '', score = NULL, verdict = NULL WHERE id = ?1",
+                params![id],
+            )?;
+            conn.execute("DELETE FROM blacklist WHERE ticker = ?1", params![ticker])?;
+        }
+
+        if !targets.is_empty() {
+            tracing::info!("패자 부활: {}개 (threshold: {:.0}점, 삼진아웃 제외)", targets.len(), threshold);
+        }
+        Ok(targets.len())
     })
 }
 
@@ -791,7 +836,8 @@ mod tests {
             );
             CREATE TABLE IF NOT EXISTS blacklist (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL UNIQUE,
-                reason TEXT NOT NULL DEFAULT '', added_at TEXT NOT NULL
+                reason TEXT NOT NULL DEFAULT '', added_at TEXT NOT NULL,
+                strike_count INTEGER NOT NULL DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS prompts (
                 type TEXT PRIMARY KEY, content TEXT NOT NULL
@@ -1129,6 +1175,61 @@ mod tests {
         setup_test_db();
         let reset = super::reset_judged_for_reeval().unwrap();
         assert_eq!(reset, 0);
+    }
+
+    #[test]
+    fn revive_near_misses_basic() {
+        setup_test_db();
+        let min_score = 60.0;
+
+        // 55점 — threshold(54) 이상 → 부활 대상
+        let id1 = insert_candidate("NEAR", "NAS", "Near", "T", "r", None).unwrap();
+        update_candidate_judge(id1, 55.0, "close").unwrap();
+        update_candidate_status(id1, CandidateStatus::Blacklisted).unwrap();
+        add_blacklist("NEAR", "처단: 55점 < 기준 60점").unwrap();
+
+        // 40점 — threshold(54) 미만 → 부활 불가
+        let id2 = insert_candidate("FAR", "NAS", "Far", "T", "r", None).unwrap();
+        update_candidate_judge(id2, 40.0, "bad").unwrap();
+        update_candidate_status(id2, CandidateStatus::Blacklisted).unwrap();
+        add_blacklist("FAR", "처단: 40점 < 기준 60점").unwrap();
+
+        // API 실패 (score 없음) → 부활 불가
+        let id3 = insert_candidate("DEAD", "NAS", "Dead", "T", "r", None).unwrap();
+        update_candidate_status(id3, CandidateStatus::Blacklisted).unwrap();
+        add_blacklist("DEAD", "한투 API 조회 실패 (자동)").unwrap();
+
+        let revived = revive_near_misses(min_score).unwrap();
+        assert_eq!(revived, 1);
+
+        // NEAR: pending으로 복귀, BL 삭제
+        let c = get_candidate_by_ticker("NEAR").unwrap().unwrap();
+        assert_eq!(c.status, CandidateStatus::Pending);
+        assert!(!is_blacklisted("NEAR").unwrap());
+
+        // FAR: 그대로 BL
+        assert!(is_blacklisted("FAR").unwrap());
+        // DEAD: 그대로 BL
+        assert!(is_blacklisted("DEAD").unwrap());
+    }
+
+    #[test]
+    fn revive_three_strikes_out() {
+        setup_test_db();
+        let min_score = 60.0;
+
+        let id = insert_candidate("RETRY", "NAS", "Retry", "T", "r", None).unwrap();
+        update_candidate_judge(id, 58.0, "close").unwrap();
+        update_candidate_status(id, CandidateStatus::Blacklisted).unwrap();
+
+        // 3번 BL (strike_count = 3)
+        add_blacklist("RETRY", "처단: 1차").unwrap();
+        add_blacklist("RETRY", "처단: 2차").unwrap();
+        add_blacklist("RETRY", "처단: 3차").unwrap();
+
+        let revived = revive_near_misses(min_score).unwrap();
+        assert_eq!(revived, 0); // 삼진아웃 → 부활 불가
+        assert!(is_blacklisted("RETRY").unwrap());
     }
 
     #[test]
