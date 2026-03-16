@@ -104,11 +104,14 @@ pub async fn hunt(client: &reqwest::Client) -> Result<Vec<HuntResult>> {
     }
 
     let full_prompt = format!(
-        "{hunt_prompt}\n\n\
+        "## Instructions\n\
+         {hunt_prompt}\n\n\
+         ## Output Format\n\
          Return exactly {candidate_count} items as a JSON array:\n\
+         ```json\n\
          [{{\"ticker\":\"XXX\",\"market\":\"NAS\",\"name\":\"...\",\"sector\":\"...\",\"reason\":\"...\"}}]\n\
-         market: NAS (NASDAQ), NYS (NYSE), AMS (AMEX).\n\
-         No other text, no markdown."
+         ```\n\
+         - market: NAS (NASDAQ), NYS (NYSE), AMS (AMEX)"
     );
 
     let response = call_llm(client, &hunt_model, &full_prompt).await;
@@ -178,13 +181,17 @@ pub async fn judge(
     }
 
     let full_prompt = format!(
-        "{judge_prompt}\n\n\
-         Here is the real market data for each stock:\n\
+        "## Instructions\n\
+         {judge_prompt}\n\n\
+         ## Market Data\n\
          {data_text}\n\n\
+         ## Output Format\n\
          Return a JSON array with your evaluation:\n\
+         ```json\n\
          [{{\"ticker\":\"XXX\",\"score\":85,\"verdict\":\"...\"}}]\n\
-         score: 0-100, verdict: brief explanation.\n\
-         No other text, no markdown."
+         ```\n\
+         - score: 0–100\n\
+         - verdict: brief explanation"
     );
 
     // Gemma 호출

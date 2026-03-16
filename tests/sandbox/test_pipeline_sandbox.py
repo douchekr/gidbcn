@@ -29,8 +29,15 @@ HUNT_PROMPT = """\
 
 목록의 형태
 - 티커, 거래소, 한 줄 설명
-- 이외의 내용은 붙이지 않는다
-"""
+- 이외의 내용은 붙이지 않는다"""
+
+JUDGE_PROMPT = """\
+You are a financial analyst evaluating US small-cap stocks under $10.
+Score each stock 0-100 based on:
+- Financial health (PER, PBR, EPS)
+- Growth potential
+- Risk assessment
+- Market position"""
 
 # ── 색상 ──
 GREEN = "\033[92m"
@@ -55,13 +62,15 @@ def step_hunt(api_key):
     header("1/3", "Flash Lite 사냥")
 
     candidate_count = 15
-    prompt = f"""{HUNT_PROMPT}
-Return exactly {candidate_count} items as a JSON array:
-[{{"ticker":"XXX","market":"NAS","name":"Company Name","sector":"Sector","reason":"한 줄 설명"}}]
-market: NAS (NASDAQ), NYS (NYSE), AMS (AMEX).
-No other text, no markdown.
+    prompt = f"""## Instructions
+{HUNT_PROMPT}
 
-Exclude these blacklisted tickers: none"""
+## Output Format
+Return exactly {candidate_count} items as a JSON array:
+```json
+[{{"ticker":"XXX","market":"NAS","name":"Company Name","sector":"Sector","reason":"한 줄 설명"}}]
+```
+- market: NAS (NASDAQ), NYS (NYSE), AMS (AMEX)"""
 
     text = call_llm(api_key, HUNT_MODEL, prompt)
     candidates = parse_json_array(text)
@@ -106,20 +115,19 @@ def step_judge(api_key, collected):
 
     combined = "\n---\n".join(c["detail"] for c in collected)
 
-    prompt = f"""You are a financial analyst evaluating US small-cap stocks under $10.
-Score each stock 0-100 based on:
-- Financial health (PER, PBR, EPS)
-- Growth potential
-- Risk assessment
-- Market position
+    prompt = f"""## Instructions
+{JUDGE_PROMPT}
 
-Here is the real market data for each stock:
+## Market Data
 {combined}
 
+## Output Format
 Return a JSON array with your evaluation:
+```json
 [{{"ticker":"XXX","score":85,"verdict":"..."}}]
-score: 0-100, verdict: brief explanation.
-No other text, no markdown."""
+```
+- score: 0–100
+- verdict: brief explanation"""
 
     text = call_llm(api_key, JUDGE_MODEL, prompt)
     results = parse_json_array(text)
