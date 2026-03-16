@@ -1352,10 +1352,9 @@ fn cmd_watch_list() -> String {
     let mut msg = format!("⚖️ 평가 완료 ({})개\n", candidates.len());
     for (i, c) in candidates.iter().enumerate().take(30) {
         let score = c.score.map_or("-".to_string(), |s| format!("{s:.0}"));
-        let verdict = c.verdict.as_deref().unwrap_or("");
-        let verdict_short = truncate_chars(verdict, 40);
+        let reason_short = truncate_chars(&c.reason, 40);
         msg.push_str(&format!(
-            "\n{}. {} ({}) [{score}점]\n   {verdict_short}",
+            "\n{}. {} ({}) [{score}점]\n   {reason_short}",
             i + 1, c.ticker, c.sector,
         ));
     }
