@@ -29,6 +29,7 @@ pub fn init_db() -> Result<()> {
             name        TEXT NOT NULL DEFAULT '',
             sector      TEXT NOT NULL DEFAULT '',
             reason      TEXT NOT NULL DEFAULT '',
+            hunt_score  REAL,
             score       REAL,
             verdict     TEXT,
             status      TEXT NOT NULL DEFAULT 'pending',
@@ -109,6 +110,7 @@ pub fn init_db() -> Result<()> {
     let _ = conn.execute("ALTER TABLE candidates ADD COLUMN detail_text TEXT NOT NULL DEFAULT ''", []);
     let _ = conn.execute("ALTER TABLE candidates ADD COLUMN market TEXT NOT NULL DEFAULT ''", []);
     let _ = conn.execute("ALTER TABLE blacklist ADD COLUMN strike_count INTEGER NOT NULL DEFAULT 1", []);
+    let _ = conn.execute("ALTER TABLE candidates ADD COLUMN hunt_score REAL", []);
     // ticker UNIQUE 마이그레이션: 중복 중 최신만 남기고 삭제 + unique index
     let _ = conn.execute(
         "DELETE FROM candidates WHERE id NOT IN (SELECT MAX(id) FROM candidates GROUP BY ticker)", [],
@@ -146,20 +148,22 @@ pub fn insert_candidate(
     name: &str,
     sector: &str,
     reason: &str,
+    hunt_score: f64,
     prompt_id: Option<i64>,
 ) -> Result<i64> {
     with_db(|conn| {
         let now = now_iso();
         conn.execute(
-            "INSERT INTO candidates (ticker, market, name, sector, reason, prompt_id, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO candidates (ticker, market, name, sector, reason, hunt_score, prompt_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(ticker) DO UPDATE SET
                name = excluded.name,
                sector = excluded.sector,
                reason = excluded.reason,
+               hunt_score = excluded.hunt_score,
                market = excluded.market,
                prompt_id = excluded.prompt_id",
-            params![ticker, market, name, sector, reason, prompt_id, now],
+            params![ticker, market, name, sector, reason, hunt_score, prompt_id, now],
         )?;
         let id: i64 = conn.query_row(
             "SELECT id FROM candidates WHERE ticker = ?1", params![ticker], |row| row.get(0),
@@ -172,12 +176,12 @@ pub fn list_candidates(status: Option<CandidateStatus>) -> Result<Vec<Candidate>
     with_db(|conn| {
         let (sql, param): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match status {
             Some(s) => (
-                "SELECT id, ticker, market, name, sector, reason, score, verdict, status, prompt_id, created_at, judged_at, detail_text
+                "SELECT id, ticker, market, name, sector, reason, hunt_score, score, verdict, status, prompt_id, created_at, judged_at, detail_text
                  FROM candidates WHERE status = ?1 ORDER BY score DESC, id DESC",
                 vec![Box::new(s.as_str().to_string())],
             ),
             None => (
-                "SELECT id, ticker, market, name, sector, reason, score, verdict, status, prompt_id, created_at, judged_at, detail_text
+                "SELECT id, ticker, market, name, sector, reason, hunt_score, score, verdict, status, prompt_id, created_at, judged_at, detail_text
                  FROM candidates ORDER BY score DESC, id DESC",
                 vec![],
             ),
@@ -192,13 +196,14 @@ pub fn list_candidates(status: Option<CandidateStatus>) -> Result<Vec<Candidate>
                 name: row.get(3)?,
                 sector: row.get(4)?,
                 reason: row.get(5)?,
-                score: row.get(6)?,
-                verdict: row.get(7)?,
-                status: CandidateStatus::from_str(&row.get::<_, String>(8)?),
-                prompt_id: row.get(9)?,
-                created_at: row.get(10)?,
-                judged_at: row.get(11)?,
-                detail_text: row.get(12)?,
+                hunt_score: row.get(6)?,
+                score: row.get(7)?,
+                verdict: row.get(8)?,
+                status: CandidateStatus::from_str(&row.get::<_, String>(9)?),
+                prompt_id: row.get(10)?,
+                created_at: row.get(11)?,
+                judged_at: row.get(12)?,
+                detail_text: row.get(13)?,
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
@@ -240,7 +245,7 @@ pub fn update_candidate_status(id: i64, status: CandidateStatus) -> Result<()> {
 pub fn get_candidate_by_ticker(ticker: &str) -> Result<Option<Candidate>> {
     with_db(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT id, ticker, market, name, sector, reason, score, verdict, status, prompt_id, created_at, judged_at, detail_text
+            "SELECT id, ticker, market, name, sector, reason, hunt_score, score, verdict, status, prompt_id, created_at, judged_at, detail_text
              FROM candidates WHERE ticker = ?1 ORDER BY id DESC LIMIT 1",
         )?;
         let mut rows = stmt.query_map(params![ticker], |row| {
@@ -251,13 +256,14 @@ pub fn get_candidate_by_ticker(ticker: &str) -> Result<Option<Candidate>> {
                 name: row.get(3)?,
                 sector: row.get(4)?,
                 reason: row.get(5)?,
-                score: row.get(6)?,
-                verdict: row.get(7)?,
-                status: CandidateStatus::from_str(&row.get::<_, String>(8)?),
-                prompt_id: row.get(9)?,
-                created_at: row.get(10)?,
-                judged_at: row.get(11)?,
-                detail_text: row.get(12)?,
+                hunt_score: row.get(6)?,
+                score: row.get(7)?,
+                verdict: row.get(8)?,
+                status: CandidateStatus::from_str(&row.get::<_, String>(9)?),
+                prompt_id: row.get(10)?,
+                created_at: row.get(11)?,
+                judged_at: row.get(12)?,
+                detail_text: row.get(13)?,
             })
         })?;
         Ok(rows.next().and_then(|r| r.ok()))
@@ -845,7 +851,7 @@ mod tests {
                 id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL UNIQUE,
                 market TEXT NOT NULL DEFAULT '',
                 name TEXT NOT NULL DEFAULT '', sector TEXT NOT NULL DEFAULT '',
-                reason TEXT NOT NULL DEFAULT '', score REAL, verdict TEXT,
+                reason TEXT NOT NULL DEFAULT '', hunt_score REAL, score REAL, verdict TEXT,
                 status TEXT NOT NULL DEFAULT 'pending', prompt_id INTEGER,
                 created_at TEXT NOT NULL, judged_at TEXT,
                 detail_text TEXT NOT NULL DEFAULT ''
@@ -904,7 +910,7 @@ mod tests {
     #[test]
     fn candidate_insert_and_judge() {
         setup_test_db();
-        let id = insert_candidate("AAPL", "NAS", "Apple", "Tech", "solid fundamentals", None).unwrap();
+        let id = insert_candidate("AAPL", "NAS", "Apple", "Tech", "solid fundamentals", 0.0, None).unwrap();
         let c = get_candidate_by_ticker("AAPL").unwrap().unwrap();
         assert_eq!(c.status, CandidateStatus::Pending);
         assert!(c.score.is_none());
@@ -919,11 +925,11 @@ mod tests {
     #[test]
     fn candidate_upsert_updates_reason_keeps_status() {
         setup_test_db();
-        let id1 = insert_candidate("SOUN", "NAS", "SoundHound", "AI", "voice platform", None).unwrap();
+        let id1 = insert_candidate("SOUN", "NAS", "SoundHound", "AI", "voice platform", 75.0, None).unwrap();
         update_candidate_judge(id1, 78.0, "promising").unwrap();
 
         // 같은 ticker 재삽입 → reason/name/sector 갱신, status/score/verdict 유지
-        let id2 = insert_candidate("SOUN", "NAS", "SoundHound AI", "AI/Voice", "updated reason", None).unwrap();
+        let id2 = insert_candidate("SOUN", "NAS", "SoundHound AI", "AI/Voice", "updated reason", 80.0, None).unwrap();
         assert_eq!(id1, id2); // 같은 row
 
         let c = get_candidate_by_ticker("SOUN").unwrap().unwrap();
@@ -1059,7 +1065,7 @@ mod tests {
     #[test]
     fn candidate_market_stored() {
         setup_test_db();
-        insert_candidate("SOUN", "NAS", "SoundHound", "AI", "voice platform", None).unwrap();
+        insert_candidate("SOUN", "NAS", "SoundHound", "AI", "voice platform", 75.0, None).unwrap();
         let c = get_candidate_by_ticker("SOUN").unwrap().unwrap();
         assert_eq!(c.market, "NAS");
         assert_eq!(c.ticker, "SOUN");
@@ -1069,7 +1075,7 @@ mod tests {
     #[test]
     fn candidate_market_default_empty() {
         setup_test_db();
-        insert_candidate("GEVO", "", "Gevo", "Energy", "renewable fuel", None).unwrap();
+        insert_candidate("GEVO", "", "Gevo", "Energy", "renewable fuel", 0.0, None).unwrap();
         let c = get_candidate_by_ticker("GEVO").unwrap().unwrap();
         assert_eq!(c.market, "");
     }
@@ -1077,7 +1083,7 @@ mod tests {
     #[test]
     fn candidate_collected_status() {
         setup_test_db();
-        let id = insert_candidate("TSLA", "NAS", "Tesla", "EV", "growth", None).unwrap();
+        let id = insert_candidate("TSLA", "NAS", "Tesla", "EV", "growth", 0.0, None).unwrap();
         update_candidate_collected(id, "Price: $8.50\nPER: 12").unwrap();
         let c = get_candidate_by_ticker("TSLA").unwrap().unwrap();
         assert_eq!(c.status, CandidateStatus::Collected);
@@ -1087,7 +1093,7 @@ mod tests {
     #[test]
     fn candidate_status_update() {
         setup_test_db();
-        let id = insert_candidate("FAIL", "NYS", "FailCo", "Junk", "bad", None).unwrap();
+        let id = insert_candidate("FAIL", "NYS", "FailCo", "Junk", "bad", 0.0, None).unwrap();
         update_candidate_status(id, CandidateStatus::Blacklisted).unwrap();
         let c = get_candidate_by_ticker("FAIL").unwrap().unwrap();
         assert_eq!(c.status, CandidateStatus::Blacklisted);
@@ -1102,8 +1108,8 @@ mod tests {
     #[test]
     fn list_candidates_by_status() {
         setup_test_db();
-        insert_candidate("AAA", "NAS", "A Co", "Tech", "r1", None).unwrap();
-        let id2 = insert_candidate("BBB", "NYS", "B Co", "Fin", "r2", None).unwrap();
+        insert_candidate("AAA", "NAS", "A Co", "Tech", "r1", 0.0, None).unwrap();
+        let id2 = insert_candidate("BBB", "NYS", "B Co", "Fin", "r2", 0.0, None).unwrap();
         update_candidate_judge(id2, 90.0, "good").unwrap();
 
         let pending = list_candidates(Some(CandidateStatus::Pending)).unwrap();
@@ -1140,7 +1146,7 @@ mod tests {
             ("T4", "AMS", 60.0),
             ("T5", "NAS", 50.0),
         ] {
-            let id = insert_candidate(ticker, market, ticker, "Sec", "reason", None).unwrap();
+            let id = insert_candidate(ticker, market, ticker, "Sec", "reason", 0.0, None).unwrap();
             update_candidate_judge(id, *score, "v").unwrap();
         }
 
@@ -1164,7 +1170,7 @@ mod tests {
     #[test]
     fn cull_excess_judged_no_op_under_limit() {
         setup_test_db();
-        let id = insert_candidate("SOLO", "NAS", "Solo", "Tech", "r", None).unwrap();
+        let id = insert_candidate("SOLO", "NAS", "Solo", "Tech", "r", 0.0, None).unwrap();
         update_candidate_judge(id, 75.0, "ok").unwrap();
 
         let culled = cull_excess_judged(50).unwrap();
@@ -1184,9 +1190,9 @@ mod tests {
     #[test]
     fn reset_judged_for_reeval() {
         setup_test_db();
-        let id1 = insert_candidate("RE1", "NAS", "Re1", "Tech", "r", None).unwrap();
-        let id2 = insert_candidate("RE2", "NYS", "Re2", "Fin", "r", None).unwrap();
-        let _id3 = insert_candidate("PE1", "AMS", "Pe1", "Bio", "r", None).unwrap();
+        let id1 = insert_candidate("RE1", "NAS", "Re1", "Tech", "r", 0.0, None).unwrap();
+        let id2 = insert_candidate("RE2", "NYS", "Re2", "Fin", "r", 0.0, None).unwrap();
+        let _id3 = insert_candidate("PE1", "AMS", "Pe1", "Bio", "r", 0.0, None).unwrap();
 
         update_candidate_judge(id1, 80.0, "good").unwrap();
         update_candidate_judge(id2, 70.0, "ok").unwrap();
@@ -1218,19 +1224,19 @@ mod tests {
         let min_score = 60.0;
 
         // 55점 — threshold(54) 이상 → 부활 대상
-        let id1 = insert_candidate("NEAR", "NAS", "Near", "T", "r", None).unwrap();
+        let id1 = insert_candidate("NEAR", "NAS", "Near", "T", "r", 0.0, None).unwrap();
         update_candidate_judge(id1, 55.0, "close").unwrap();
         update_candidate_status(id1, CandidateStatus::Blacklisted).unwrap();
         add_blacklist("NEAR", "처단: 55점 < 기준 60점").unwrap();
 
         // 40점 — threshold(54) 미만 → 부활 불가
-        let id2 = insert_candidate("FAR", "NAS", "Far", "T", "r", None).unwrap();
+        let id2 = insert_candidate("FAR", "NAS", "Far", "T", "r", 0.0, None).unwrap();
         update_candidate_judge(id2, 40.0, "bad").unwrap();
         update_candidate_status(id2, CandidateStatus::Blacklisted).unwrap();
         add_blacklist("FAR", "처단: 40점 < 기준 60점").unwrap();
 
         // API 실패 (score 없음) → 부활 불가
-        let id3 = insert_candidate("DEAD", "NAS", "Dead", "T", "r", None).unwrap();
+        let id3 = insert_candidate("DEAD", "NAS", "Dead", "T", "r", 0.0, None).unwrap();
         update_candidate_status(id3, CandidateStatus::Blacklisted).unwrap();
         add_blacklist("DEAD", "한투 API 조회 실패 (자동)").unwrap();
 
@@ -1253,7 +1259,7 @@ mod tests {
         setup_test_db();
         let min_score = 60.0;
 
-        let id = insert_candidate("RETRY", "NAS", "Retry", "T", "r", None).unwrap();
+        let id = insert_candidate("RETRY", "NAS", "Retry", "T", "r", 0.0, None).unwrap();
         update_candidate_judge(id, 58.0, "close").unwrap();
         update_candidate_status(id, CandidateStatus::Blacklisted).unwrap();
 
@@ -1270,8 +1276,8 @@ mod tests {
     #[test]
     fn clear_candidates_by_status_works() {
         setup_test_db();
-        insert_candidate("P1", "NAS", "P1", "T", "r", None).unwrap();
-        let id2 = insert_candidate("J1", "NYS", "J1", "T", "r", None).unwrap();
+        insert_candidate("P1", "NAS", "P1", "T", "r", 0.0, None).unwrap();
+        let id2 = insert_candidate("J1", "NYS", "J1", "T", "r", 0.0, None).unwrap();
         update_candidate_judge(id2, 80.0, "ok").unwrap();
 
         let n = clear_candidates_by_status(CandidateStatus::Pending).unwrap();

@@ -9,6 +9,7 @@ pub struct Candidate {
     pub name: String,
     pub sector: String,
     pub reason: String,
+    pub hunt_score: Option<f64>,
     pub score: Option<f64>,
     pub verdict: Option<String>,
     pub status: CandidateStatus,
@@ -83,6 +84,8 @@ pub struct HuntResult {
     pub sector: String,
     #[serde(default)]
     pub reason: String,
+    #[serde(default)]
+    pub score: f64,
 }
 
 /// Gemini 평가 결과 (JSON 파싱용)
@@ -179,6 +182,7 @@ mod tests {
             name: "Blink Charging".to_string(),
             sector: "EV".to_string(),
             reason: "charging infra".to_string(),
+            score: 75.0,
         };
         let json = serde_json::to_string(&r).unwrap();
         let restored: HuntResult = serde_json::from_str(&json).unwrap();

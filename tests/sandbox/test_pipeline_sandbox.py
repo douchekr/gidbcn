@@ -68,16 +68,18 @@ def step_hunt(api_key):
 ## Output Format
 Return exactly {candidate_count} items as a JSON array:
 ```json
-[{{"ticker":"XXX","market":"NAS","name":"Company Name","sector":"Sector","reason":"한 줄 설명"}}]
+[{{"ticker":"XXX","market":"NAS","name":"Company Name","sector":"Sector","reason":"한 줄 설명","score":75}}]
 ```
-- market: NAS (NASDAQ), NYS (NYSE), AMS (AMEX)"""
+- market: NAS (NASDAQ), NYS (NYSE), AMS (AMEX)
+- score: 0–100 (your confidence in this pick based on the instructions above)"""
 
     text = call_llm(api_key, HUNT_MODEL, prompt)
     candidates = parse_json_array(text)
 
     print(f"  사냥 결과: {len(candidates)}개")
     for c in candidates:
-        print(f"    {c.get('ticker','?'):6s} [{c.get('market','?')}] {c.get('name','?')[:25]:25s} — {c.get('reason','?')[:40]}")
+        score = c.get('score', 0)
+        print(f"    {c.get('ticker','?'):6s} [{c.get('market','?')}] {score:3.0f}점 {c.get('name','?')[:25]:25s} — {c.get('reason','?')[:40]}")
 
     ok(f"사냥 완료 ({len(candidates)}개)")
     return candidates
@@ -110,7 +112,7 @@ def step_collect_mock(candidates):
     return collected
 
 # ── 3단계: Gemma 평가 ──
-def step_judge(api_key, collected):
+def step_judge(api_key, collected, candidates):
     header("3/3", "Gemma 평가")
 
     combined = "\n---\n".join(c["detail"] for c in collected)
@@ -132,20 +134,27 @@ Return a JSON array with your evaluation:
     text = call_llm(api_key, JUDGE_MODEL, prompt)
     results = parse_json_array(text)
 
-    print(f"  평가 결과: {len(results)}개")
+    hunt_weight = 1.0  # config의 hunt_weight와 동일
+    print(f"  평가 결과: {len(results)}개 (hunt_weight={hunt_weight})")
     min_score = 60.0
     survived = 0
     culled = 0
+
+    # hunt score lookup
+    hunt_scores = {c.get("ticker", "").upper(): c.get("score", 0) for c in candidates}
+
     for r in sorted(results, key=lambda x: x.get("score", 0), reverse=True):
-        ticker = r.get("ticker", "?")
-        score = r.get("score", 0)
+        ticker = r.get("ticker", "?").upper()
+        judge_score = r.get("score", 0)
+        hunt_s = hunt_scores.get(ticker, 0)
+        final_score = (hunt_s * hunt_weight + judge_score) / (hunt_weight + 1.0)
         verdict = r.get("verdict", "")[:50]
-        status = f"{GREEN}생존{RESET}" if score >= min_score else f"{RED}처단{RESET}"
-        if score >= min_score:
+        status = f"{GREEN}생존{RESET}" if final_score >= min_score else f"{RED}처단{RESET}"
+        if final_score >= min_score:
             survived += 1
         else:
             culled += 1
-        print(f"    {ticker:6s} {score:5.1f}점 {status} — {verdict}")
+        print(f"    {ticker:6s} H:{hunt_s:3.0f} J:{judge_score:3.0f} → {final_score:5.1f}점 {status} — {verdict}")
 
     ok(f"평가 완료 (✅{survived}생존 ⚖️{culled}처단)")
     return results
@@ -217,7 +226,7 @@ def main():
     collected = step_collect_mock(candidates)
 
     # 3. Gemma 평가
-    results = step_judge(gemini_key, collected)
+    results = step_judge(gemini_key, collected, candidates)
 
     # 결과 요약
     print(f"\n{CYAN}{'='*60}")

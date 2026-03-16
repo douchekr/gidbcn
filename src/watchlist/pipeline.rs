@@ -148,15 +148,19 @@ pub async fn run_cycle(
     let judge_results = gemini::judge(http_client, &combined_data).await
         .context("평가 실패")?;
 
-    let min_score = crate::storage::with_config(|c| c.watchlist.min_score);
+    let (min_score, hunt_weight) = crate::storage::with_config(|c| {
+        (c.watchlist.min_score, c.watchlist.hunt_weight)
+    });
 
     for jr in &judge_results {
         let ticker = jr.ticker.to_uppercase();
         if let Some(candidate) = collected.iter().find(|c| c.ticker == ticker) {
-            if let Err(e) = db::update_candidate_judge(candidate.id, jr.score, &jr.verdict) {
+            let hunt_s = candidate.hunt_score.unwrap_or(0.0);
+            let final_score = (hunt_s * hunt_weight + jr.score) / (hunt_weight + 1.0);
+            if let Err(e) = db::update_candidate_judge(candidate.id, final_score, &jr.verdict) {
                 tracing::error!("{ticker} DB 업데이트 실패: {e:#}");
-            } else if jr.score < min_score {
-                let reason = format!("처단: {:.0}점 < 기준 {:.0}점", jr.score, min_score);
+            } else if final_score < min_score {
+                let reason = format!("처단: {:.0}점 < 기준 {:.0}점", final_score, min_score);
                 let _ = db::add_blacklist(&ticker, &reason);
                 let _ = db::update_candidate_status(candidate.id, CandidateStatus::Blacklisted);
                 report.culled += 1;
@@ -247,15 +251,19 @@ pub async fn run_reeval(
     let judge_results = gemini::judge(http_client, &combined_data).await
         .context("재평가 실패")?;
 
-    let min_score = crate::storage::with_config(|c| c.watchlist.min_score);
+    let (min_score, hunt_weight) = crate::storage::with_config(|c| {
+        (c.watchlist.min_score, c.watchlist.hunt_weight)
+    });
 
     for jr in &judge_results {
         let ticker = jr.ticker.to_uppercase();
         if let Some(candidate) = collected.iter().find(|c| c.ticker == ticker) {
-            if let Err(e) = db::update_candidate_judge(candidate.id, jr.score, &jr.verdict) {
+            let hunt_s = candidate.hunt_score.unwrap_or(0.0);
+            let final_score = (hunt_s * hunt_weight + jr.score) / (hunt_weight + 1.0);
+            if let Err(e) = db::update_candidate_judge(candidate.id, final_score, &jr.verdict) {
                 tracing::error!("{ticker} 재평가 DB 업데이트 실패: {e:#}");
-            } else if jr.score < min_score {
-                let reason = format!("재평가 처단: {:.0}점 < 기준 {:.0}점", jr.score, min_score);
+            } else if final_score < min_score {
+                let reason = format!("재평가 처단: {:.0}점 < 기준 {:.0}점", final_score, min_score);
                 let _ = db::add_blacklist(&ticker, &reason);
                 let _ = db::update_candidate_status(candidate.id, CandidateStatus::Blacklisted);
                 report.culled += 1;

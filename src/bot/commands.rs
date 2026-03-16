@@ -1397,15 +1397,16 @@ fn cmd_watch_export() -> String {
     if candidates.is_empty() {
         return "평가된 종목이 없습니다.".to_string();
     }
-    let mut lines = vec!["ticker,market,name,sector,score,reason,verdict".to_string()];
+    let mut lines = vec!["ticker,market,name,sector,hunt_score,score,reason,verdict".to_string()];
     for c in &candidates {
+        let hunt_s = c.hunt_score.map_or(String::new(), |s| format!("{s:.0}"));
         let score = c.score.map_or(String::new(), |s| format!("{s:.0}"));
         let verdict = c.verdict.as_deref().unwrap_or("");
         lines.push(format!(
-            "{},{},{},\"{}\",{},\"{}\",\"{}\"",
+            "{},{},{},\"{}\",{},{},\"{}\",\"{}\"",
             c.ticker, c.market, c.name,
             c.sector.replace('"', "\"\""),
-            score,
+            hunt_s, score,
             c.reason.replace('"', "\"\""),
             verdict.replace('"', "\"\""),
         ));
@@ -1441,6 +1442,7 @@ fn cmd_watch_info(ticker: &str) -> String {
         Ok(None) => return format!("{ticker} 을(를) 찾을 수 없습니다."),
         Err(e) => return format!("조회 실패: {e:#}"),
     };
+    let hunt_s = candidate.hunt_score.map_or("-".to_string(), |s| format!("{s:.0}"));
     let score = candidate.score.map_or("-".to_string(), |s| format!("{s:.0}"));
     let verdict = candidate.verdict.as_deref().unwrap_or("-");
     let status = candidate.status.as_str();
@@ -1449,7 +1451,8 @@ fn cmd_watch_info(ticker: &str) -> String {
          이름: {}\n\
          섹터: {}\n\
          상태: {status}\n\
-         점수: {score}\n\
+         사냥점수: {hunt_s}\n\
+         최종점수: {score}\n\
          판결: {verdict}\n\
          사유: {}\n\
          등록: {}",

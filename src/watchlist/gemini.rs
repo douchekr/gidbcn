@@ -169,9 +169,10 @@ pub async fn hunt(client: &reqwest::Client) -> Result<Vec<HuntResult>> {
          ## Output Format\n\
          Return exactly {candidate_count} items as a JSON array:\n\
          ```json\n\
-         [{{\"ticker\":\"XXX\",\"market\":\"NAS\",\"name\":\"...\",\"sector\":\"...\",\"reason\":\"...\"}}]\n\
+         [{{\"ticker\":\"XXX\",\"market\":\"NAS\",\"name\":\"...\",\"sector\":\"...\",\"reason\":\"...\",\"score\":75}}]\n\
          ```\n\
-         - market: NAS (NASDAQ), NYS (NYSE), AMS (AMEX)"
+         - market: NAS (NASDAQ), NYS (NYSE), AMS (AMEX)\n\
+         - score: 0–100 (your confidence in this pick based on the instructions above)"
     );
 
     let response = call_llm_with_fallback(client, &hunt_models, &full_prompt, CACHE_HUNT).await;
@@ -212,7 +213,7 @@ pub async fn hunt(client: &reqwest::Client) -> Result<Vec<HuntResult>> {
             tracing::info!("사냥 결과 블랙리스트 제외: {ticker}");
             continue;
         }
-        let _ = db::insert_candidate(&ticker, &r.market, &r.name, &r.sector, &r.reason, Some(prompt_id));
+        let _ = db::insert_candidate(&ticker, &r.market, &r.name, &r.sector, &r.reason, r.score, Some(prompt_id));
         saved.push(r.clone());
     }
 
