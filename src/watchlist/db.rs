@@ -25,7 +25,7 @@ pub fn init_db() -> Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS candidates (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker      TEXT NOT NULL,
+            ticker      TEXT NOT NULL UNIQUE,
             name        TEXT NOT NULL DEFAULT '',
             sector      TEXT NOT NULL DEFAULT '',
             reason      TEXT NOT NULL DEFAULT '',
@@ -109,6 +109,13 @@ pub fn init_db() -> Result<()> {
     let _ = conn.execute("ALTER TABLE candidates ADD COLUMN detail_text TEXT NOT NULL DEFAULT ''", []);
     let _ = conn.execute("ALTER TABLE candidates ADD COLUMN market TEXT NOT NULL DEFAULT ''", []);
     let _ = conn.execute("ALTER TABLE blacklist ADD COLUMN strike_count INTEGER NOT NULL DEFAULT 1", []);
+    // ticker UNIQUE 마이그레이션: 중복 중 최신만 남기고 삭제 + unique index
+    let _ = conn.execute(
+        "DELETE FROM candidates WHERE id NOT IN (SELECT MAX(id) FROM candidates GROUP BY ticker)", [],
+    );
+    let _ = conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_ticker_unique ON candidates(ticker)", [],
+    );
 
     DB_CONN.with(|c| *c.borrow_mut() = Some(conn));
     tracing::info!("watchlist DB initialized: {DB_PATH}");
@@ -145,10 +152,19 @@ pub fn insert_candidate(
         let now = now_iso();
         conn.execute(
             "INSERT INTO candidates (ticker, market, name, sector, reason, prompt_id, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(ticker) DO UPDATE SET
+               name = excluded.name,
+               sector = excluded.sector,
+               reason = excluded.reason,
+               market = excluded.market,
+               prompt_id = excluded.prompt_id",
             params![ticker, market, name, sector, reason, prompt_id, now],
         )?;
-        Ok(conn.last_insert_rowid())
+        let id: i64 = conn.query_row(
+            "SELECT id FROM candidates WHERE ticker = ?1", params![ticker], |row| row.get(0),
+        )?;
+        Ok(id)
     })
 }
 
@@ -826,7 +842,7 @@ mod tests {
         conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS candidates (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL,
+                id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL UNIQUE,
                 market TEXT NOT NULL DEFAULT '',
                 name TEXT NOT NULL DEFAULT '', sector TEXT NOT NULL DEFAULT '',
                 reason TEXT NOT NULL DEFAULT '', score REAL, verdict TEXT,
@@ -898,6 +914,25 @@ mod tests {
         assert_eq!(c.status, CandidateStatus::Judged);
         assert_eq!(c.score, Some(85.0));
         assert_eq!(c.verdict.as_deref(), Some("strong buy"));
+    }
+
+    #[test]
+    fn candidate_upsert_updates_reason_keeps_status() {
+        setup_test_db();
+        let id1 = insert_candidate("SOUN", "NAS", "SoundHound", "AI", "voice platform", None).unwrap();
+        update_candidate_judge(id1, 78.0, "promising").unwrap();
+
+        // 같은 ticker 재삽입 → reason/name/sector 갱신, status/score/verdict 유지
+        let id2 = insert_candidate("SOUN", "NAS", "SoundHound AI", "AI/Voice", "updated reason", None).unwrap();
+        assert_eq!(id1, id2); // 같은 row
+
+        let c = get_candidate_by_ticker("SOUN").unwrap().unwrap();
+        assert_eq!(c.reason, "updated reason");
+        assert_eq!(c.name, "SoundHound AI");
+        assert_eq!(c.sector, "AI/Voice");
+        assert_eq!(c.status, CandidateStatus::Judged); // 유지
+        assert_eq!(c.score, Some(78.0)); // 유지
+        assert_eq!(c.verdict.as_deref(), Some("promising")); // 유지
     }
 
     #[test]
