@@ -66,11 +66,58 @@ async fn call_llm(client: &reqwest::Client, model: &str, prompt: &str) -> Result
     let status = resp.status();
     let text = resp.text().await.context("LLM 응답 읽기 실패")?;
 
+    // 429 분당 한도(TPM/RPM) 초과 시 retryDelay만큼 대기 후 1회 재시도
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        if let Some(delay) = parse_retry_delay(&text) {
+            tracing::info!("모델 {model} 429 — {delay}초 대기 후 재시도");
+            tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+
+            let resp2 = client
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send()
+                .await
+                .context("LLM API 재시도 요청 실패")?;
+
+            let status2 = resp2.status();
+            let text2 = resp2.text().await.context("LLM 재시도 응답 읽기 실패")?;
+            if !status2.is_success() {
+                bail!("LLM API 오류 ({status2}): {text2}");
+            }
+            return extract_gemini_text(&text2);
+        }
+    }
+
     if !status.is_success() {
         bail!("LLM API 오류 ({status}): {text}");
     }
 
     extract_gemini_text(&text)
+}
+
+/// 429 응답에서 분당 한도(PerMinute) 초과인 경우만 retryDelay(초)를 반환.
+/// 일일 한도(PerDay) 등은 재시도 무의미 → None.
+fn parse_retry_delay(body: &str) -> Option<u64> {
+    let json: serde_json::Value = serde_json::from_str(body).ok()?;
+    let details = json["error"]["details"].as_array()?;
+
+    let is_per_minute = details.iter().any(|d| {
+        d["violations"].as_array().map_or(false, |vs| {
+            vs.iter().any(|v| {
+                v["quotaId"].as_str().map_or(false, |id| id.contains("PerMinute"))
+            })
+        })
+    });
+    if !is_per_minute {
+        return None;
+    }
+
+    details.iter()
+        .find(|d| d["@type"].as_str() == Some("type.googleapis.com/google.rpc.RetryInfo"))?
+        ["retryDelay"].as_str()
+        .and_then(|s| s.trim_end_matches('s').parse::<f64>().ok())
+        .map(|f| f.ceil() as u64)
 }
 
 /// 모델 리스트 순회 폴백 — 성공하면 해당 모델 기억, 전부 실패 시 마지막 에러 반환
@@ -491,5 +538,62 @@ mod tests {
         let body = r#"{"candidates": [{"content": {"parts": []}}]}"#;
         let err = extract_gemini_text(body).unwrap_err();
         assert!(err.to_string().contains("비어있습니다"));
+    }
+
+    // --- parse_retry_delay 테스트 ---
+
+    #[test]
+    fn retry_delay_per_minute_quota() {
+        let body = r#"{
+            "error": {
+                "code": 429,
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                        "violations": [{
+                            "quotaId": "GenerateContentInputTokensPerModelPerMinute-FreeTier"
+                        }]
+                    },
+                    {
+                        "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                        "retryDelay": "20.5s"
+                    }
+                ]
+            }
+        }"#;
+        assert_eq!(parse_retry_delay(body), Some(21)); // ceil(20.5)
+    }
+
+    #[test]
+    fn retry_delay_per_day_quota_returns_none() {
+        let body = r#"{
+            "error": {
+                "code": 429,
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                        "violations": [{
+                            "quotaId": "GenerateContentRequestsPerModelPerDay-FreeTier"
+                        }]
+                    },
+                    {
+                        "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                        "retryDelay": "60s"
+                    }
+                ]
+            }
+        }"#;
+        assert_eq!(parse_retry_delay(body), None);
+    }
+
+    #[test]
+    fn retry_delay_no_details() {
+        let body = r#"{"error": {"code": 429}}"#;
+        assert_eq!(parse_retry_delay(body), None);
+    }
+
+    #[test]
+    fn retry_delay_invalid_json() {
+        assert_eq!(parse_retry_delay("not json"), None);
     }
 }
