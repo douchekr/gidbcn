@@ -111,6 +111,7 @@ pub async fn run_cycle(
     let pending = db::list_candidates(Some(CandidateStatus::Pending))
         .context("pending 후보 조회 실패")?;
 
+    let mut collected_ids: Vec<i64> = Vec::new();
     for candidate in &pending {
         let hint = if candidate.market.is_empty() { None } else { Some(candidate.market.as_str()) };
         match fetch_detail(api, &candidate.ticker, hint).await {
@@ -120,6 +121,7 @@ pub async fn run_cycle(
                     tracing::error!("수집 데이터 저장 실패 {}: {e:#}", candidate.ticker);
                     report.collect_failed += 1;
                 } else {
+                    collected_ids.push(candidate.id);
                     report.collected += 1;
                 }
             }
@@ -132,9 +134,12 @@ pub async fn run_cycle(
         }
     }
 
-    // 3. 평가 (collected 모아서 Gemini 1콜)
-    let collected = db::list_candidates(Some(CandidateStatus::Collected))
-        .context("collected 후보 조회 실패")?;
+    // 3. 평가 (이번 사이클에서 수집한 것만 — 잔류 collected는 재평가에서 처리)
+    let collected: Vec<_> = db::list_candidates(Some(CandidateStatus::Collected))
+        .context("collected 후보 조회 실패")?
+        .into_iter()
+        .filter(|c| collected_ids.contains(&c.id))
+        .collect();
 
     if collected.is_empty() {
         return Ok(report);
