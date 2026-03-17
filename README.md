@@ -425,6 +425,7 @@ CREATE TABLE signals (
 | `gemini::judge()` 내부 | `judge_calls_today >= max` | bail |
 
 - `api_usage` 테이블에 모델 폴백 전체 결과 기준 1회 기록 (모델별 X)
+- **일일 리셋 기준: 태평양시간 자정 (고정 UTC-8)** — Google AI Studio 쿼터 리셋과 동기화
 
 #### Google 측 429 대응 (`call_llm`)
 | 한도 종류 | quotaId 키워드 | 대응 |
