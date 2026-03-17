@@ -842,12 +842,18 @@ fn migrate_json_signals() -> Result<()> {
 
 // --- Helpers ---
 
+/// Google AI Studio 일일 쿼터 리셋 기준: 태평양시간 (고정 UTC-8, 서머타임 무시)
+fn pacific_now() -> chrono::DateTime<chrono::FixedOffset> {
+    let pt = chrono::FixedOffset::west_opt(8 * 3600).unwrap();
+    chrono::Utc::now().with_timezone(&pt)
+}
+
 fn now_iso() -> String {
-    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
+    pacific_now().format("%Y-%m-%dT%H:%M:%S%:z").to_string()
 }
 
 fn today_prefix() -> String {
-    chrono::Utc::now().format("%Y-%m-%d").to_string()
+    pacific_now().format("%Y-%m-%d").to_string()
 }
 
 #[cfg(test)]

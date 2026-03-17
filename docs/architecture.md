@@ -472,7 +472,7 @@ API 호출 직전 본체 체크 + 스케줄러 진입 시 사전필터 (이중 �
 | judge (Gemma) | `judge()` 진입부 | 사냥/재평가 사이클 진입 시 | 14,400/일 |
 
 사용량 추적: `api_usage` 테이블에 `log_api_call()` → 성공/실패 구분 없이 전체 카운트.
-리셋: 별도 로직 없음. `called_at LIKE '{today}%'` 날짜 매칭으로 자연 리셋.
+리셋: `called_at LIKE '{today}%'` 날짜 매칭으로 자연 리셋. 기준 시간대는 태평양시간(고정 UTC-8, 서머타임 무시) — Google AI Studio 일일 쿼터 리셋과 동기화.
 
 ### 모델 구성
 
@@ -481,7 +481,7 @@ API 호출 직전 본체 체크 + 스케줄러 진입 시 사전필터 (이중 �
 | 사냥 | `hunt_models` | ["gemini-2.5-flash-lite"] | 배열 순서대로 폴백 |
 | 평가 | `judge_models` | ["gemma-3-27b-it"] | 배열 순서대로 폴백 |
 
-API 호출 실패 시 다음 모델로 자동 폴백. 당일 성공한 모델을 우선 사용하며 다음날 리셋.
+API 호출 실패 시 다음 모델로 자동 폴백. 당일 성공한 모델을 우선 사용하며 다음날(태평양시간 자정) 리셋.
 
 둘 다 Google AI Studio API (`generativelanguage.googleapis.com`)를 `gemini_api_key` 하나로 호출.
 Gemini 호출은 API Actor를 거치지 않음 (별도 `reqwest::Client` 직접 사용).
