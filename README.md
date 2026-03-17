@@ -384,8 +384,19 @@ CREATE TABLE signals (
 | `/w hist` | 최근 Gemini 호출 이력 |
 | `/w clear pending\|judged\|bl` | 상태별 일괄 삭제 |
 
-**사냥 파이프라인**: 사냥(Flash Lite) → 수집(한투 API) → 평가(Gemma) → 도태.
-**재평가**: KST 02:00 하루 1회, judged 후보 재수집→재평가→도태.
+**사냥 파이프라인** (`run_cycle`):
+1. 사냥 (Flash Lite → 후보 추천, `candidate_count`개)
+2. 수집 (pending → 한투 API 시세 조회 → collected, 실패 시 BL행)
+3. 평가 (**이번 사이클 수집분만** judge → judged/BL, 잔류 collected 미포함)
+4. 도태 (judged 중 `max_survivors` 초과분 BL행)
+
+**재평가** (`run_reeval`, KST 02:00 하루 1회):
+1. 패자 부활 (BL 중 score ≥ min_score×0.9 && strike < 3 → pending 복귀)
+2. judged → pending 리셋 + 잔류 collected 체크 (이전 실패분 포함)
+3. 재수집 (pending → 한투 API → collected)
+4. **배치 평가** (collected를 `candidate_count` 단위로 분할, 배치 간 60초 대기)
+5. 도태
+
 프롬프트 미설정 시 `/w run` 불가. hunt/judge 프롬프트를 각각 설정해야 동작.
 상세: [docs/architecture.md](docs/architecture.md) → "워치리스트 (US 소형주 디스커버리)"
 
@@ -402,6 +413,33 @@ CREATE TABLE signals (
 | `hunt_interval_minutes` | 30 | 사냥 주기 (분) |
 | `min_score` | 60.0 | 처단 기준 점수 |
 | `retention_days` | 100 | 데이터 보관 기간 (일) |
+
+### Gemini API 한도 대응
+
+#### 사용자 설정 할당량 (내부 RPD)
+| 체크 위치 | 대상 | 동작 |
+|-----------|------|------|
+| 스케줄러 — hunt 진입 | `hunt_exhausted() \|\| judge_exhausted()` | 사이클 스킵 |
+| 스케줄러 — reeval 진입 | `judge_exhausted()` | 재평가 스킵 |
+| `gemini::hunt()` 내부 | `hunt_calls_today >= max` | bail |
+| `gemini::judge()` 내부 | `judge_calls_today >= max` | bail |
+
+- `api_usage` 테이블에 모델 폴백 전체 결과 기준 1회 기록 (모델별 X)
+
+#### Google 측 429 대응 (`call_llm`)
+| 한도 종류 | quotaId 키워드 | 대응 |
+|-----------|---------------|------|
+| TPM/RPM (분당) | `PerMinute` | `retryDelay + 5초` 대기 → 같은 모델 1회 재시도 |
+| RPD (일일) 등 | 그 외 | 재시도 무의미 → 즉시 다음 모델 폴백 |
+
+#### 모델 폴백 (`call_llm_with_fallback`)
+- config의 모델 배열 순회 (당일 성공 모델 우선)
+- 각 모델: 429 PerMinute면 대기+재시도 1회 → 그래도 실패면 WARN 로그 + 다음 모델
+- 전 모델 실패 → 마지막 에러 반환
+
+#### 재평가 배치 분할 (TPM 회피)
+- collected를 `candidate_count`(30) 단위로 분할, 배치 간 **60초 대기**
+- 배치 실패 → 해당 배치 스킵 (collected 유지 → 다음 재평가에서 자동 재시도)
 
 ### 시스템
 | 명령어 | 설명 |
@@ -432,6 +470,11 @@ CREATE TABLE signals (
 | 토큰 갱신 | 만료 1시간 전 | `expires_at` 기준 자동 판단 (API Actor가 매 요청 전 체크) |
 
 - 환율 전용 스케줄 없음. 해외주식 시그널 체크(5분) 시 `GetOverseasPrice` t_rate 부산물로 자동 갱신됨.
+
+### 데이터 정리 (`cleanup_old_data`)
+- 사냥 사이클 시작 시 `retention_days`(기본 100일) 기준으로 오래된 데이터 자동 삭제
+- 대상: **상태 무관** 모든 candidates, prompt_history, api_usage
+- pending/collected도 retention 초과 시 삭제 (영구 잔류 방지)
 
 ---
 

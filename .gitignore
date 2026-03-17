@@ -2,6 +2,7 @@
 .vscode/
 .claude/
 CLAUDE.md
+context.md
 .cargo/
 *.code-workspace
 data/config.json
