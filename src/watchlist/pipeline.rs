@@ -157,6 +157,8 @@ pub async fn run_cycle(
         (c.watchlist.min_score, c.watchlist.hunt_weight)
     });
 
+    let mut matched_ids: Vec<i64> = Vec::new();
+
     for jr in &judge_results {
         let ticker = jr.ticker.to_uppercase();
         if let Some(candidate) = collected.iter().find(|c| c.ticker == ticker) {
@@ -172,6 +174,16 @@ pub async fn run_cycle(
             } else {
                 report.survived += 1;
             }
+            matched_ids.push(candidate.id);
+        }
+    }
+
+    // 감정 미매칭 → BL행
+    for c in &collected {
+        if !matched_ids.contains(&c.id) {
+            let _ = db::add_blacklist(&c.ticker, "감정 누락 (자동)");
+            let _ = db::update_candidate_status(c.id, CandidateStatus::Blacklisted);
+            report.culled += 1;
         }
     }
 
@@ -179,6 +191,7 @@ pub async fn run_cycle(
     let max_survivors = crate::storage::with_config(|c| c.watchlist.max_survivors);
     let culled_excess = db::cull_excess_judged(max_survivors).unwrap_or(0);
     report.culled += culled_excess;
+    report.survived = report.survived.saturating_sub(culled_excess);
 
     tracing::info!(
         "사이클 완료: 사냥 {}개, 수집 {}개, 생존 {}개, 척살 {}개, 실패 {}개",
@@ -217,6 +230,7 @@ pub async fn run_reeval(
         return Ok(report);
     }
     report.target += stale_collected;
+    report.collected += stale_collected;
 
     // 수집
     let pending = db::list_candidates(Some(CandidateStatus::Pending))
@@ -255,6 +269,8 @@ pub async fn run_reeval(
         (c.watchlist.min_score, c.watchlist.hunt_weight, c.watchlist.candidate_count)
     });
 
+    let mut matched_ids: Vec<i64> = Vec::new();
+
     for (i, chunk) in collected.chunks(batch_size).enumerate() {
         if i > 0 {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
@@ -289,7 +305,17 @@ pub async fn run_reeval(
                 } else {
                     report.survived += 1;
                 }
+                matched_ids.push(candidate.id);
             }
+        }
+    }
+
+    // 감정 미매칭 → BL행
+    for c in &collected {
+        if !matched_ids.contains(&c.id) {
+            let _ = db::add_blacklist(&c.ticker, "감정 누락 (자동)");
+            let _ = db::update_candidate_status(c.id, CandidateStatus::Blacklisted);
+            report.culled += 1;
         }
     }
 
@@ -297,6 +323,7 @@ pub async fn run_reeval(
     let max_survivors = crate::storage::with_config(|c| c.watchlist.max_survivors);
     let culled_excess = db::cull_excess_judged(max_survivors).unwrap_or(0);
     report.culled += culled_excess;
+    report.survived = report.survived.saturating_sub(culled_excess);
 
     tracing::info!(
         "재평가 완료: 대상 {}개, 수집 {}개, 생존 {}개, 척살 {}개, 실패 {}개",
