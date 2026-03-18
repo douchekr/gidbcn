@@ -271,7 +271,7 @@ pub async fn hunt(client: &reqwest::Client) -> Result<Vec<HuntResult>> {
     Ok(saved)
 }
 
-/// 평가: 한투 데이터 기반으로 Gemma에게 평가 요청 (기준 미달 → 처단)
+/// 평가: 한투 데이터 기반으로 Gemma에게 평가 요청 (기준 미달 → 척살)
 pub async fn judge(
     client: &reqwest::Client,
     data_text: &str,

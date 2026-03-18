@@ -165,7 +165,7 @@ pub async fn run_cycle(
             if let Err(e) = db::update_candidate_judge(candidate.id, final_score, &jr.verdict) {
                 tracing::error!("{ticker} DB 업데이트 실패: {e:#}");
             } else if final_score < min_score {
-                let reason = format!("처단: {:.0}점 < 기준 {:.0}점", final_score, min_score);
+                let reason = format!("🗡️ 척살: {:.0}점 < 기준 {:.0}점", final_score, min_score);
                 let _ = db::add_blacklist(&ticker, &reason);
                 let _ = db::update_candidate_status(candidate.id, CandidateStatus::Blacklisted);
                 report.culled += 1;
@@ -175,20 +175,20 @@ pub async fn run_cycle(
         }
     }
 
-    // 4. 도태 (상위 max_survivors만 유지)
+    // 4. 척살 (상위 max_survivors만 유지)
     let max_survivors = crate::storage::with_config(|c| c.watchlist.max_survivors);
     let culled_excess = db::cull_excess_judged(max_survivors).unwrap_or(0);
     report.culled += culled_excess;
 
     tracing::info!(
-        "사이클 완료: 사냥 {}개, 수집 {}개, 생존 {}개, 처단 {}개, 실패 {}개",
+        "사이클 완료: 사냥 {}개, 수집 {}개, 생존 {}개, 척살 {}개, 실패 {}개",
         report.hunted, report.collected, report.survived, report.culled, report.collect_failed
     );
 
     Ok(report)
 }
 
-/// 재평가 사이클: judged 후보를 재수집 → 재평가 → 도태
+/// 재평가 사이클: judged 후보를 재수집 → 재평가 → 척살
 pub async fn run_reeval(
     api: &ApiHandle,
     http_client: &reqwest::Client,
@@ -282,7 +282,7 @@ pub async fn run_reeval(
                 if let Err(e) = db::update_candidate_judge(candidate.id, final_score, &jr.verdict) {
                     tracing::error!("{ticker} 재평가 DB 업데이트 실패: {e:#}");
                 } else if final_score < min_score {
-                    let reason = format!("재평가 처단: {:.0}점 < 기준 {:.0}점", final_score, min_score);
+                    let reason = format!("🗡️ 재감정 척살: {:.0}점 < 기준 {:.0}점", final_score, min_score);
                     let _ = db::add_blacklist(&ticker, &reason);
                     let _ = db::update_candidate_status(candidate.id, CandidateStatus::Blacklisted);
                     report.culled += 1;
@@ -293,13 +293,13 @@ pub async fn run_reeval(
         }
     }
 
-    // 도태
+    // 척살
     let max_survivors = crate::storage::with_config(|c| c.watchlist.max_survivors);
     let culled_excess = db::cull_excess_judged(max_survivors).unwrap_or(0);
     report.culled += culled_excess;
 
     tracing::info!(
-        "재평가 완료: 대상 {}개, 수집 {}개, 생존 {}개, 처단 {}개, 실패 {}개",
+        "재평가 완료: 대상 {}개, 수집 {}개, 생존 {}개, 척살 {}개, 실패 {}개",
         report.target, report.collected, report.survived, report.culled, report.collect_failed
     );
 

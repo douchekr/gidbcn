@@ -327,7 +327,7 @@ pub fn list_blacklist() -> Result<Vec<BlacklistEntry>> {
     })
 }
 
-// --- Prompts (사냥용 / 처단용) ---
+// --- Prompts (사냥용 / 감정용) ---
 
 pub fn get_prompt(prompt_type: PromptType) -> Result<Option<String>> {
     with_db(|conn| {
@@ -459,7 +459,7 @@ pub fn clear_all_blacklist() -> Result<usize> {
 
 // --- 재평가 ---
 
-/// judged 중 점수 상위 max_survivors 외 나머지를 블랙리스트 처단
+/// judged 중 점수 상위 max_survivors 외 나머지를 척살
 pub fn cull_excess_judged(max_survivors: usize) -> Result<usize> {
     with_db(|conn| {
         // 상위 N개의 id 목록
@@ -475,7 +475,7 @@ pub fn cull_excess_judged(max_survivors: usize) -> Result<usize> {
             return Ok(0);
         }
 
-        // 처단 대상: judged인데 keep_ids에 없는 것
+        // 척살 대상: judged인데 keep_ids에 없는 것
         let placeholders = keep_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!(
             "SELECT id, ticker, score FROM candidates WHERE status = 'judged' AND id NOT IN ({placeholders})"
@@ -495,7 +495,7 @@ pub fn cull_excess_judged(max_survivors: usize) -> Result<usize> {
 
         let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
         for (id, ticker, score) in &victims {
-            let reason = format!("도태: {:.0}점 (상위 {max_survivors}위 밖)", score);
+            let reason = format!("🗡️ 척살: {:.0}점 (상위 {max_survivors}위 밖)", score);
             conn.execute(
                 "INSERT INTO blacklist (ticker, reason, added_at, strike_count)
                  VALUES (?1, ?2, ?3, 1)
@@ -513,7 +513,7 @@ pub fn cull_excess_judged(max_survivors: usize) -> Result<usize> {
 
         let culled = victims.len();
         if culled > 0 {
-            tracing::info!("도태: {culled}개 처단 (상위 {max_survivors}개 유지)");
+            tracing::info!("척살: {culled}개 (상위 {max_survivors}개 유지)");
         }
         Ok(culled)
     })
@@ -1250,13 +1250,13 @@ mod tests {
         let id1 = insert_candidate("NEAR", "NAS", "Near", "T", "r", 0.0, None).unwrap();
         update_candidate_judge(id1, 55.0, "close").unwrap();
         update_candidate_status(id1, CandidateStatus::Blacklisted).unwrap();
-        add_blacklist("NEAR", "처단: 55점 < 기준 60점").unwrap();
+        add_blacklist("NEAR", "🗡️ 척살: 55점 < 기준 60점").unwrap();
 
         // 40점 — threshold(54) 미만 → 부활 불가
         let id2 = insert_candidate("FAR", "NAS", "Far", "T", "r", 0.0, None).unwrap();
         update_candidate_judge(id2, 40.0, "bad").unwrap();
         update_candidate_status(id2, CandidateStatus::Blacklisted).unwrap();
-        add_blacklist("FAR", "처단: 40점 < 기준 60점").unwrap();
+        add_blacklist("FAR", "🗡️ 척살: 40점 < 기준 60점").unwrap();
 
         // API 실패 (score 없음) → 부활 불가
         let id3 = insert_candidate("DEAD", "NAS", "Dead", "T", "r", 0.0, None).unwrap();
@@ -1287,9 +1287,9 @@ mod tests {
         update_candidate_status(id, CandidateStatus::Blacklisted).unwrap();
 
         // 3번 BL (strike_count = 3)
-        add_blacklist("RETRY", "처단: 1차").unwrap();
-        add_blacklist("RETRY", "처단: 2차").unwrap();
-        add_blacklist("RETRY", "처단: 3차").unwrap();
+        add_blacklist("RETRY", "🗡️ 척살: 1차").unwrap();
+        add_blacklist("RETRY", "🗡️ 척살: 2차").unwrap();
+        add_blacklist("RETRY", "🗡️ 척살: 3차").unwrap();
 
         let revived = revive_near_misses(min_score).unwrap();
         assert_eq!(revived, 0); // 삼진아웃 → 부활 불가
