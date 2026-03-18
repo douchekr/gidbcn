@@ -1377,11 +1377,14 @@ fn cmd_watch_list() -> String {
     } else {
         format!("⚖️ 평가 완료 ({total})개\n")
     };
+    let bob_count = 7;
     for (i, c) in candidates.iter().enumerate().take(30) {
         let score = c.score.map_or("-".to_string(), |s| format!("{s:.0}"));
         let reason_short = truncate_chars(&c.reason, 40);
+        let bob = if i < bob_count { "🏆" } else { "" };
+        let hunt_n = if c.hunt_count > 1 { format!(" ×{}", c.hunt_count) } else { String::new() };
         msg.push_str(&format!(
-            "\n{}. {} ({}) [{score}점]\n   {reason_short}",
+            "\n{bob}{}. {} ({}{hunt_n}) [{score}점]\n   {reason_short}",
             i + 1, c.ticker, c.sector,
         ));
     }

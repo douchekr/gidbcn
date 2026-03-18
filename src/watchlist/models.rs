@@ -17,6 +17,7 @@ pub struct Candidate {
     pub created_at: String,
     pub judged_at: Option<String>,
     pub detail_text: String,
+    pub hunt_count: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

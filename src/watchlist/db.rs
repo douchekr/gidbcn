@@ -111,6 +111,7 @@ pub fn init_db() -> Result<()> {
     let _ = conn.execute("ALTER TABLE candidates ADD COLUMN market TEXT NOT NULL DEFAULT ''", []);
     let _ = conn.execute("ALTER TABLE blacklist ADD COLUMN strike_count INTEGER NOT NULL DEFAULT 1", []);
     let _ = conn.execute("ALTER TABLE candidates ADD COLUMN hunt_score REAL", []);
+    let _ = conn.execute("ALTER TABLE candidates ADD COLUMN hunt_count INTEGER NOT NULL DEFAULT 1", []);
     // ticker UNIQUE 마이그레이션: 중복 중 최신만 남기고 삭제 + unique index
     let _ = conn.execute(
         "DELETE FROM candidates WHERE id NOT IN (SELECT MAX(id) FROM candidates GROUP BY ticker)", [],
@@ -162,7 +163,8 @@ pub fn insert_candidate(
                reason = excluded.reason,
                hunt_score = excluded.hunt_score,
                market = excluded.market,
-               prompt_id = excluded.prompt_id",
+               prompt_id = excluded.prompt_id,
+               hunt_count = candidates.hunt_count + 1",
             params![ticker, market, name, sector, reason, hunt_score, prompt_id, now],
         )?;
         let id: i64 = conn.query_row(
@@ -176,12 +178,12 @@ pub fn list_candidates(status: Option<CandidateStatus>) -> Result<Vec<Candidate>
     with_db(|conn| {
         let (sql, param): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match status {
             Some(s) => (
-                "SELECT id, ticker, market, name, sector, reason, hunt_score, score, verdict, status, prompt_id, created_at, judged_at, detail_text
+                "SELECT id, ticker, market, name, sector, reason, hunt_score, score, verdict, status, prompt_id, created_at, judged_at, detail_text, hunt_count
                  FROM candidates WHERE status = ?1 ORDER BY score DESC, id DESC",
                 vec![Box::new(s.as_str().to_string())],
             ),
             None => (
-                "SELECT id, ticker, market, name, sector, reason, hunt_score, score, verdict, status, prompt_id, created_at, judged_at, detail_text
+                "SELECT id, ticker, market, name, sector, reason, hunt_score, score, verdict, status, prompt_id, created_at, judged_at, detail_text, hunt_count
                  FROM candidates ORDER BY score DESC, id DESC",
                 vec![],
             ),
@@ -204,6 +206,7 @@ pub fn list_candidates(status: Option<CandidateStatus>) -> Result<Vec<Candidate>
                 created_at: row.get(11)?,
                 judged_at: row.get(12)?,
                 detail_text: row.get(13)?,
+                hunt_count: row.get(14)?,
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
@@ -245,7 +248,7 @@ pub fn update_candidate_status(id: i64, status: CandidateStatus) -> Result<()> {
 pub fn get_candidate_by_ticker(ticker: &str) -> Result<Option<Candidate>> {
     with_db(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT id, ticker, market, name, sector, reason, hunt_score, score, verdict, status, prompt_id, created_at, judged_at, detail_text
+            "SELECT id, ticker, market, name, sector, reason, hunt_score, score, verdict, status, prompt_id, created_at, judged_at, detail_text, hunt_count
              FROM candidates WHERE ticker = ?1 ORDER BY id DESC LIMIT 1",
         )?;
         let mut rows = stmt.query_map(params![ticker], |row| {
@@ -264,6 +267,7 @@ pub fn get_candidate_by_ticker(ticker: &str) -> Result<Option<Candidate>> {
                 created_at: row.get(11)?,
                 judged_at: row.get(12)?,
                 detail_text: row.get(13)?,
+                hunt_count: row.get(14)?,
             })
         })?;
         Ok(rows.next().and_then(|r| r.ok()))
@@ -871,7 +875,8 @@ mod tests {
                 reason TEXT NOT NULL DEFAULT '', hunt_score REAL, score REAL, verdict TEXT,
                 status TEXT NOT NULL DEFAULT 'pending', prompt_id INTEGER,
                 created_at TEXT NOT NULL, judged_at TEXT,
-                detail_text TEXT NOT NULL DEFAULT ''
+                detail_text TEXT NOT NULL DEFAULT '',
+                hunt_count INTEGER NOT NULL DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS blacklist (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL UNIQUE,
@@ -956,6 +961,7 @@ mod tests {
         assert_eq!(c.status, CandidateStatus::Judged); // 유지
         assert_eq!(c.score, Some(78.0)); // 유지
         assert_eq!(c.verdict.as_deref(), Some("promising")); // 유지
+        assert_eq!(c.hunt_count, 2); // upsert로 1→2 누적
     }
 
     #[test]
