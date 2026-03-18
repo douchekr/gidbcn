@@ -18,7 +18,7 @@ impl CycleReport {
     pub fn summary(&self) -> String {
         let err = if self.collect_failed == 0 { String::new() } else { format!(" ❗{}", self.collect_failed) };
         format!(
-            "🎯 사냥 보고 ({}탐색 → ✅{}포획 ⚖️{}처단{})",
+            "🎯 사냥 보고 (🔍{}탐색 → 🦎{}양피 🗡️{}척살{})",
             self.hunted, self.survived, self.culled, err,
         )
     }
@@ -319,9 +319,9 @@ pub struct RevalReport {
 impl RevalReport {
     pub fn summary(&self) -> String {
         let err = if self.collect_failed == 0 { String::new() } else { format!(" ❗{}", self.collect_failed) };
-        let rev = if self.revived == 0 { String::new() } else { format!(" 🔁{}발굴", self.revived) };
+        let rev = if self.revived == 0 { String::new() } else { format!(" 🔁{}해제", self.revived) };
         format!(
-            "🔄 재선별 보고 ({}마리{rev} → ✅{}포획 ⚖️{}처단{})",
+            "🔄 가죽 점검 ({}마리{rev} → 🦎{}양피 🗡️{}척살{})",
             self.target, self.survived, self.culled, err,
         )
     }
@@ -365,8 +365,8 @@ mod tests {
         let summary = report.summary();
         assert!(summary.contains("사냥 보고"));
         assert!(summary.contains("30탐색"));
-        assert!(summary.contains("✅20포획"));
-        assert!(summary.contains("⚖️5처단"));
+        assert!(summary.contains("🦎20양피"));
+        assert!(summary.contains("🗡️5척살"));
         assert!(summary.contains("❗5"));
     }
 
@@ -385,10 +385,10 @@ mod tests {
             target: 50, revived: 0, collected: 45, survived: 30, culled: 15, collect_failed: 5,
         };
         let summary = report.summary();
-        assert!(summary.contains("재선별 보고"));
+        assert!(summary.contains("가죽 점검"));
         assert!(summary.contains("50마리"));
-        assert!(summary.contains("✅30포획"));
-        assert!(summary.contains("⚖️15처단"));
+        assert!(summary.contains("🦎30양피"));
+        assert!(summary.contains("🗡️15척살"));
         assert!(summary.contains("❗5"));
     }
 
@@ -408,6 +408,6 @@ mod tests {
         };
         let summary = report.summary();
         assert!(summary.contains("0마리"));
-        assert!(summary.contains("✅0포획"));
+        assert!(summary.contains("🦎0양피"));
     }
 }

@@ -209,12 +209,12 @@ fn help_text() -> String {
      /status|st — 시스템 상태\n\
      /ping — 핑\n\n\
      워치리스트 (/watch 또는 /w):\n\
-     /w run — 사냥 시작\n\
-     /w ls — 평가 완료 종목\n\
-     /w pending — 대기 중 후보\n\
+     /w run — 사냥 출발\n\
+     /w ls — 가죽 확보 현황\n\
+     /w pending — 탐색 중 먹잇감\n\
      /w info [TICKER] — 종목 상세\n\
-     /w bl — 썩은 고기\n\
-     /w budget — Gemini 사용량\n\
+     /w bl — 독도마뱀\n\
+     /w budget — 오늘 탄약\n\
      /w prompt hunt|judge show|set\n\
      /w hist — 호출 이력\n\n\
      사용자 관리 (/user, 오너 전용):\n\
@@ -1315,23 +1315,23 @@ async fn cmd_watchlist(
             }
 
             if discovery_enabled.load(Ordering::SeqCst) {
-                return "이미 사냥 중입니다.".to_string();
+                return "이미 사막에 나가있다.".to_string();
             }
 
             discovery_enabled.store(true, Ordering::SeqCst);
             discovery_trigger.notify_one(); // 즉시 사냥 1회
             let hunt_min = storage::with_config(|c| c.watchlist.hunt_interval_minutes);
             format!(
-                "🔍 사냥 출발! (즉시 1회 + {hunt_min}분 주기)\n\
+                "🔍 사냥 출발! 모하비로 향한다. (즉시 1회 + {hunt_min}분 주기)\n\
                  /w stop 으로 중지"
             )
         }
         "stop" => {
             if !discovery_enabled.load(Ordering::SeqCst) {
-                return "사냥 중이 아닙니다.".to_string();
+                return "은신처에 있다. 사냥 중이 아니다.".to_string();
             }
             discovery_enabled.store(false, Ordering::SeqCst);
-            "⏹ 사냥 중지".to_string()
+            "⏹ 은신처 복귀. 오늘은 여기까지다.".to_string()
         }
         "list" | "ls" => cmd_watch_list(),
         "pending" => cmd_watch_pending(),
@@ -1343,16 +1343,16 @@ async fn cmd_watchlist(
         "history" | "hist" => cmd_watch_history(),
         "clear" => cmd_watch_clear(&rest),
         _ => "📋 워치리스트 명령어\n\n\
-              /w run — 사냥 시작 (사냥/수집/평가 자동)\n\
-              /w stop — 사냥 중지\n\
-              /w ls — 평가 완료 종목 (점수순)\n\
+              /w run — 사냥 출발\n\
+              /w stop — 은신처 복귀\n\
+              /w ls — 가죽 확보 현황\n\
               /w export — CSV 내보내기\n\
-              /w pending — 대기 중 후보\n\
+              /w pending — 탐색 중 먹잇감\n\
               /w info [TICKER] — 종목 상세\n\
-              /w bl — 썩은 고기\n\
+              /w bl — 독도마뱀\n\
               /w bl add [TICKER] [사유]\n\
               /w bl rm [TICKER]\n\
-              /w budget — 오늘 Gemini 사용량\n\
+              /w budget — 오늘 탄약\n\
               /w prompt hunt show|set\n\
               /w prompt judge show|set\n\
               /w hist — 최근 호출 이력\n\
@@ -1369,19 +1369,24 @@ fn cmd_watch_list() -> String {
         Err(e) => return format!("조회 실패: {e:#}"),
     };
     if candidates.is_empty() {
-        return "포획된 종목이 없습니다. /w run 으로 사냥을 시작하세요.".to_string();
+        let in_progress = wdb::count_candidates_by_status(CandidateStatus::Pending).unwrap_or(0)
+            + wdb::count_candidates_by_status(CandidateStatus::Collected).unwrap_or(0);
+        if in_progress > 0 {
+            return "게코를 잡았지만 아직 가죽을 벗기지 못했다.".to_string();
+        }
+        return "포획된 게코가 없다. /w run 으로 사냥을 시작하라.".to_string();
     }
     let total = candidates.len();
     let mut msg = if total > 30 {
-        format!("🏆 선별 완료 ({total}마리) — 상위 등급 30마리\n")
+        format!("🦎 가죽 확보 ({total}마리) — 품질 상위 30마리\n")
     } else {
-        format!("🏆 선별 완료 ({total}마리)\n")
+        format!("🦎 가죽 확보 ({total}마리)\n")
     };
     let bob_count = 7;
     for (i, c) in candidates.iter().enumerate().take(30) {
         let score = c.score.map_or("-".to_string(), |s| format!("{s:.0}"));
         let reason_short = truncate_chars(&c.reason, 40);
-        let bob = if i < bob_count { "🏆" } else { "" };
+        let bob = if i < bob_count { "🦎✨" } else { "" };
         let hunt_n = if c.hunt_count > 1 { format!(" ×{}", c.hunt_count) } else { String::new() };
         msg.push_str(&format!(
             "\n{bob}{}. {} ({}{hunt_n}) [{score}점]\n   {reason_short}",
@@ -1454,8 +1459,8 @@ fn cmd_watch_info(ticker: &str) -> String {
          이름: {}\n\
          섹터: {}\n\
          상태: {status}\n\
-         사냥점수: {hunt_s}\n\
-         최종점수: {score}\n\
+         포획 난이도: {hunt_s}\n\
+         희귀도: {score}\n\
          판결: {verdict}\n\
          사유: {}\n\
          등록: {}",
@@ -1473,7 +1478,7 @@ fn cmd_watch_blacklist(args: &str) -> String {
             };
             let reason = parts.get(2..).map(|p| p.join(" ")).unwrap_or_default();
             match wdb::add_blacklist(&ticker, &reason) {
-                Ok(_) => format!("✅ {ticker} 썩은 고기행"),
+                Ok(_) => format!("✅ {ticker} 독도마뱀 판정"),
                 Err(e) => format!("실패: {e:#}"),
             }
         }
@@ -1483,8 +1488,8 @@ fn cmd_watch_blacklist(args: &str) -> String {
                 None => return "사용법: /w bl rm [TICKER]".to_string(),
             };
             match wdb::remove_blacklist(&ticker) {
-                Ok(true) => format!("✅ {ticker} 썩은 고기에서 건짐"),
-                Ok(false) => format!("{ticker} 은(는) 썩은 고기에 없습니다."),
+                Ok(true) => format!("✅ {ticker} 독도마뱀에서 구출"),
+                Ok(false) => format!("{ticker} 은(는) 독도마뱀에 없다."),
                 Err(e) => format!("실패: {e:#}"),
             }
         }
@@ -1495,11 +1500,11 @@ fn cmd_watch_blacklist(args: &str) -> String {
                 Err(e) => return format!("조회 실패: {e:#}"),
             };
             if list.is_empty() {
-                return "썩은 고기가 없습니다.".to_string();
+                return "독도마뱀이 없다. 깨끗한 사막이군.".to_string();
             }
             let total = list.len();
             let show = 10;
-            let mut msg = format!("🦴 썩은 고기 ({total}마리)\n\n최근 {show}마리:");
+            let mut msg = format!("☠️ 독도마뱀 ({total}마리)\n\n최근 {show}마리:");
             for b in list.iter().take(show) {
                 let reason = truncate_chars(&b.reason, 30);
                 msg.push_str(&format!("\n{} — {}", b.ticker, reason));
@@ -1522,7 +1527,7 @@ fn cmd_watch_budget() -> String {
     let (max_hunt, max_judge) = storage::with_config(|c| {
         (c.watchlist.max_hunt_calls_per_day, c.watchlist.max_judge_calls_per_day)
     });
-    format!("💰 오늘 탄약: 사냥 {hunt}/{max_hunt} | 선별 {judge}/{max_judge}")
+    format!("🔫 오늘 탄약: 사냥 {hunt}/{max_hunt} | 감정 {judge}/{max_judge}")
 }
 
 fn cmd_watch_prompt(args: &str) -> String {
@@ -1580,7 +1585,7 @@ fn cmd_watch_clear(args: &str) -> String {
         }
         "bl" => {
             match wdb::clear_all_blacklist() {
-                Ok(n) => format!("🗑 썩은 고기 {n}건 소각"),
+                Ok(n) => format!("🗑 독도마뱀 {n}마리 매장"),
                 Err(e) => format!("삭제 실패: {e:#}"),
             }
         }
