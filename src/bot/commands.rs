@@ -1429,9 +1429,9 @@ fn cmd_watch_pending() -> String {
         Err(e) => return format!("조회 실패: {e:#}"),
     };
     if candidates.is_empty() {
-        return "대기 중인 후보가 없습니다.".to_string();
+        return "탐색 중인 먹잇감이 없다.".to_string();
     }
-    let mut msg = format!("🎯 대기 중 후보 ({}개)\n", candidates.len());
+    let mut msg = format!("🔍 탐색 중 먹잇감 ({}마리)\n", candidates.len());
     for (i, c) in candidates.iter().enumerate().take(50) {
         msg.push_str(&format!(
             "\n{}. {} — {} ({})",
