@@ -18,7 +18,7 @@ impl CycleReport {
     pub fn summary(&self) -> String {
         let err = if self.collect_failed == 0 { String::new() } else { format!(" ❗{}", self.collect_failed) };
         format!(
-            "🎯 사냥 보고 (🔍{}탐색 → 🦎{}양피 🗡️{}척살{})",
+            "🎯 사냥 보고 (🔍포착 +{} → 🦎양피 +{} 🗡️척살 +{}{})",
             self.hunted, self.survived, self.culled, err,
         )
     }
@@ -319,9 +319,9 @@ pub struct RevalReport {
 impl RevalReport {
     pub fn summary(&self) -> String {
         let err = if self.collect_failed == 0 { String::new() } else { format!(" ❗{}", self.collect_failed) };
-        let rev = if self.revived == 0 { String::new() } else { format!(" 🔁{}해제", self.revived) };
+        let rev = if self.revived == 0 { String::new() } else { format!(" 🔁해제 +{}", self.revived) };
         format!(
-            "🔄 가죽 점검 ({}마리{rev} → 🦎{}양피 🗡️{}척살{})",
+            "🔄 가죽 점검 ({}마리{rev} → 🦎양피 +{} 🗡️척살 +{}{})",
             self.target, self.survived, self.culled, err,
         )
     }
@@ -364,9 +364,9 @@ mod tests {
         };
         let summary = report.summary();
         assert!(summary.contains("사냥 보고"));
-        assert!(summary.contains("30탐색"));
-        assert!(summary.contains("🦎20양피"));
-        assert!(summary.contains("🗡️5척살"));
+        assert!(summary.contains("포착 +30"));
+        assert!(summary.contains("🦎양피 +20"));
+        assert!(summary.contains("🗡️척살 +5"));
         assert!(summary.contains("❗5"));
     }
 
@@ -387,8 +387,8 @@ mod tests {
         let summary = report.summary();
         assert!(summary.contains("가죽 점검"));
         assert!(summary.contains("50마리"));
-        assert!(summary.contains("🦎30양피"));
-        assert!(summary.contains("🗡️15척살"));
+        assert!(summary.contains("🦎양피 +30"));
+        assert!(summary.contains("🗡️척살 +15"));
         assert!(summary.contains("❗5"));
     }
 
@@ -408,6 +408,6 @@ mod tests {
         };
         let summary = report.summary();
         assert!(summary.contains("0마리"));
-        assert!(summary.contains("🦎0양피"));
+        assert!(summary.contains("🦎양피 +0"));
     }
 }

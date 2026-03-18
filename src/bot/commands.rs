@@ -211,7 +211,6 @@ fn help_text() -> String {
      워치리스트 (/watch 또는 /w):\n\
      /w run — 사냥 출발\n\
      /w ls — 가죽 확보 현황\n\
-     /w pending — 탐색 중 먹잇감\n\
      /w info [TICKER] — 종목 상세\n\
      /w bl — 독도마뱀\n\
      /w budget — 오늘 탄약\n\
@@ -1334,7 +1333,6 @@ async fn cmd_watchlist(
             "⏹ 은신처 복귀. 오늘은 여기까지다.".to_string()
         }
         "list" | "ls" => cmd_watch_list(),
-        "pending" => cmd_watch_pending(),
         "info" | "i" => cmd_watch_info(&rest.to_uppercase()),
         "export" | "ex" => cmd_watch_export(),
         "blacklist" | "bl" => cmd_watch_blacklist(&rest),
@@ -1347,7 +1345,6 @@ async fn cmd_watchlist(
               /w stop — 은신처 복귀\n\
               /w ls — 가죽 확보 현황\n\
               /w export — CSV 내보내기\n\
-              /w pending — 탐색 중 먹잇감\n\
               /w info [TICKER] — 종목 상세\n\
               /w bl — 독도마뱀\n\
               /w bl add [TICKER] [사유]\n\
@@ -1420,25 +1417,6 @@ fn cmd_watch_export() -> String {
         ));
     }
     format!("\u{FEFF}{}\n", lines.join("\n"))
-}
-
-fn cmd_watch_pending() -> String {
-    use crate::watchlist::models::CandidateStatus;
-    let candidates = match wdb::list_candidates(Some(CandidateStatus::Pending)) {
-        Ok(c) => c,
-        Err(e) => return format!("조회 실패: {e:#}"),
-    };
-    if candidates.is_empty() {
-        return "탐색 중인 먹잇감이 없다.".to_string();
-    }
-    let mut msg = format!("🔍 탐색 중 먹잇감 ({}마리)\n", candidates.len());
-    for (i, c) in candidates.iter().enumerate().take(50) {
-        msg.push_str(&format!(
-            "\n{}. {} — {} ({})",
-            i + 1, c.ticker, c.name, c.sector,
-        ));
-    }
-    msg
 }
 
 fn cmd_watch_info(ticker: &str) -> String {
@@ -1571,12 +1549,6 @@ fn cmd_watch_prompt(args: &str) -> String {
 fn cmd_watch_clear(args: &str) -> String {
     use crate::watchlist::models::CandidateStatus;
     match args.trim() {
-        "pending" => {
-            match wdb::clear_candidates_by_status(CandidateStatus::Pending) {
-                Ok(n) => format!("🗑 pending {n}건 삭제"),
-                Err(e) => format!("삭제 실패: {e:#}"),
-            }
-        }
         "judged" => {
             match wdb::clear_candidates_by_status(CandidateStatus::Judged) {
                 Ok(n) => format!("🗑 judged {n}건 삭제"),
@@ -1589,7 +1561,7 @@ fn cmd_watch_clear(args: &str) -> String {
                 Err(e) => format!("삭제 실패: {e:#}"),
             }
         }
-        _ => "사용법: /w clear pending|judged|bl".to_string(),
+        _ => "사용법: /w clear judged|bl".to_string(),
     }
 }
 

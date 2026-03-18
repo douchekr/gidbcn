@@ -371,7 +371,6 @@ CREATE TABLE signals (
 | `/w run` | 사냥 시작 (즉시 1회 + 자동 주기) |
 | `/w stop` | 사냥 중지 |
 | `/w ls` | 평가 완료 종목 (점수순) |
-| `/w pending` | 대기 중 후보 |
 | `/w info [TICKER]` | 종목 상세 |
 | `/w bl` | 블랙리스트 목록 |
 | `/w bl add [TICKER] [사유]` | 수동 블랙리스트 추가 |
@@ -382,7 +381,7 @@ CREATE TABLE signals (
 | `/w prompt judge show` | 평가용 프롬프트 확인 |
 | `/w prompt judge set [내용]` | 평가용 프롬프트 설정 |
 | `/w hist` | 최근 Gemini 호출 이력 |
-| `/w clear pending\|judged\|bl` | 상태별 일괄 삭제 |
+| `/w clear judged\|bl` | 상태별 일괄 삭제 |
 
 **사냥 파이프라인** (`run_cycle`):
 1. 사냥 (Flash Lite → 후보 추천, `candidate_count`개)
