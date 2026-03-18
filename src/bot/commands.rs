@@ -209,11 +209,11 @@ fn help_text() -> String {
      /status|st — 시스템 상태\n\
      /ping — 핑\n\n\
      워치리스트 (/watch 또는 /w):\n\
-     /w run — 디스커버리 사이클\n\
+     /w run — 사냥 시작\n\
      /w ls — 평가 완료 종목\n\
      /w pending — 대기 중 후보\n\
      /w info [TICKER] — 종목 상세\n\
-     /w bl — 블랙리스트 관리\n\
+     /w bl — 썩은 고기\n\
      /w budget — Gemini 사용량\n\
      /w prompt hunt|judge show|set\n\
      /w hist — 호출 이력\n\n\
@@ -1315,23 +1315,23 @@ async fn cmd_watchlist(
             }
 
             if discovery_enabled.load(Ordering::SeqCst) {
-                return "이미 디스커버리가 실행 중입니다.".to_string();
+                return "이미 사냥 중입니다.".to_string();
             }
 
             discovery_enabled.store(true, Ordering::SeqCst);
             discovery_trigger.notify_one(); // 즉시 사냥 1회
             let hunt_min = storage::with_config(|c| c.watchlist.hunt_interval_minutes);
             format!(
-                "🔍 사냥 시작! (즉시 1회 + {hunt_min}분 주기)\n\
+                "🔍 사냥 출발! (즉시 1회 + {hunt_min}분 주기)\n\
                  /w stop 으로 중지"
             )
         }
         "stop" => {
             if !discovery_enabled.load(Ordering::SeqCst) {
-                return "디스커버리가 실행 중이 아닙니다.".to_string();
+                return "사냥 중이 아닙니다.".to_string();
             }
             discovery_enabled.store(false, Ordering::SeqCst);
-            "⏹ 디스커버리 중지".to_string()
+            "⏹ 사냥 중지".to_string()
         }
         "list" | "ls" => cmd_watch_list(),
         "pending" => cmd_watch_pending(),
@@ -1349,7 +1349,7 @@ async fn cmd_watchlist(
               /w export — CSV 내보내기\n\
               /w pending — 대기 중 후보\n\
               /w info [TICKER] — 종목 상세\n\
-              /w bl — 블랙리스트\n\
+              /w bl — 썩은 고기\n\
               /w bl add [TICKER] [사유]\n\
               /w bl rm [TICKER]\n\
               /w budget — 오늘 Gemini 사용량\n\
@@ -1369,13 +1369,13 @@ fn cmd_watch_list() -> String {
         Err(e) => return format!("조회 실패: {e:#}"),
     };
     if candidates.is_empty() {
-        return "평가된 종목이 없습니다. /w run 으로 디스커버리를 실행하세요.".to_string();
+        return "포획된 종목이 없습니다. /w run 으로 사냥을 시작하세요.".to_string();
     }
     let total = candidates.len();
     let mut msg = if total > 30 {
-        format!("⚖️ 평가 완료 ({total})개 — 점수순 상위 30개\n")
+        format!("🏆 선별 완료 ({total}마리) — 상위 등급 30마리\n")
     } else {
-        format!("⚖️ 평가 완료 ({total})개\n")
+        format!("🏆 선별 완료 ({total}마리)\n")
     };
     let bob_count = 7;
     for (i, c) in candidates.iter().enumerate().take(30) {
@@ -1473,7 +1473,7 @@ fn cmd_watch_blacklist(args: &str) -> String {
             };
             let reason = parts.get(2..).map(|p| p.join(" ")).unwrap_or_default();
             match wdb::add_blacklist(&ticker, &reason) {
-                Ok(_) => format!("✅ {ticker} 블랙리스트 추가"),
+                Ok(_) => format!("✅ {ticker} 썩은 고기행"),
                 Err(e) => format!("실패: {e:#}"),
             }
         }
@@ -1483,8 +1483,8 @@ fn cmd_watch_blacklist(args: &str) -> String {
                 None => return "사용법: /w bl rm [TICKER]".to_string(),
             };
             match wdb::remove_blacklist(&ticker) {
-                Ok(true) => format!("✅ {ticker} 블랙리스트 해제"),
-                Ok(false) => format!("{ticker} 은(는) 블랙리스트에 없습니다."),
+                Ok(true) => format!("✅ {ticker} 썩은 고기에서 건짐"),
+                Ok(false) => format!("{ticker} 은(는) 썩은 고기에 없습니다."),
                 Err(e) => format!("실패: {e:#}"),
             }
         }
@@ -1495,11 +1495,11 @@ fn cmd_watch_blacklist(args: &str) -> String {
                 Err(e) => return format!("조회 실패: {e:#}"),
             };
             if list.is_empty() {
-                return "블랙리스트가 비어있습니다.".to_string();
+                return "썩은 고기가 없습니다.".to_string();
             }
             let total = list.len();
             let show = 10;
-            let mut msg = format!("🚫 블랙리스트 ({total}개)\n\n최근 {show}개:");
+            let mut msg = format!("🦴 썩은 고기 ({total}마리)\n\n최근 {show}마리:");
             for b in list.iter().take(show) {
                 let reason = truncate_chars(&b.reason, 30);
                 msg.push_str(&format!("\n{} — {}", b.ticker, reason));
@@ -1522,7 +1522,7 @@ fn cmd_watch_budget() -> String {
     let (max_hunt, max_judge) = storage::with_config(|c| {
         (c.watchlist.max_hunt_calls_per_day, c.watchlist.max_judge_calls_per_day)
     });
-    format!("💰 오늘 사냥: {hunt}/{max_hunt} | 평가: {judge}/{max_judge}")
+    format!("💰 오늘 탄약: 사냥 {hunt}/{max_hunt} | 선별 {judge}/{max_judge}")
 }
 
 fn cmd_watch_prompt(args: &str) -> String {
@@ -1580,7 +1580,7 @@ fn cmd_watch_clear(args: &str) -> String {
         }
         "bl" => {
             match wdb::clear_all_blacklist() {
-                Ok(n) => format!("🗑 블랙리스트 {n}건 삭제"),
+                Ok(n) => format!("🗑 썩은 고기 {n}건 소각"),
                 Err(e) => format!("삭제 실패: {e:#}"),
             }
         }
