@@ -23,8 +23,9 @@
 
 | 용어 | 설명 |
 |------|------|
-| 포획 난이도 | hunt_score. Gemini가 매긴 탐색 점수 |
-| 희귀도 | score. hunt×weight + judge×(1-weight) 최종 점수 |
+| 사냥 매력 | hunt_score. Gemini가 매긴 탐색 점수 |
+| 가죽 품질 | judge_score. Gemini 감정 점수 |
+| 최종 등급 | score. 사냥 매력×weight + 가죽 품질×(1-weight) |
 
 ## 텔레그램 명령어
 

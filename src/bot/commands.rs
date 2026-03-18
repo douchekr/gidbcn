@@ -1405,7 +1405,7 @@ fn cmd_watch_export() -> String {
     if candidates.is_empty() {
         return "평가된 종목이 없습니다.".to_string();
     }
-    let mut lines = vec!["ticker,market,name,sector,hunt_score,score,reason,verdict".to_string()];
+    let mut lines = vec!["ticker,market,name,sector,사냥매력,최종등급,reason,verdict".to_string()];
     for c in &candidates {
         let hunt_s = c.hunt_score.map_or(String::new(), |s| format!("{s:.0}"));
         let score = c.score.map_or(String::new(), |s| format!("{s:.0}"));
@@ -1459,8 +1459,8 @@ fn cmd_watch_info(ticker: &str) -> String {
          이름: {}\n\
          섹터: {}\n\
          상태: {status}\n\
-         포획 난이도: {hunt_s}\n\
-         희귀도: {score}\n\
+         사냥 매력: {hunt_s}\n\
+         최종 등급: {score}\n\
          판결: {verdict}\n\
          사유: {}\n\
          등록: {}",
