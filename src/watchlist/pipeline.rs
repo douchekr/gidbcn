@@ -153,8 +153,8 @@ pub async fn run_cycle(
     let judge_results = gemini::judge(http_client, &combined_data).await
         .context("평가 실패")?;
 
-    let (min_score, hunt_weight, hunt_count_weight) = crate::storage::with_config(|c| {
-        (c.watchlist.min_score, c.watchlist.hunt_weight, c.watchlist.hunt_count_weight)
+    let (min_score, hunt_weight) = crate::storage::with_config(|c| {
+        (c.watchlist.min_score, c.watchlist.hunt_weight)
     });
 
     let mut matched_ids: Vec<i64> = Vec::new();
@@ -163,8 +163,7 @@ pub async fn run_cycle(
         let ticker = jr.ticker.to_uppercase();
         if let Some(candidate) = collected.iter().find(|c| c.ticker == ticker) {
             let hunt_s = candidate.hunt_score.unwrap_or(0.0);
-            let hunt_bonus = (candidate.hunt_count as f64).ln_1p() * hunt_count_weight;
-            let final_score = hunt_s * hunt_weight + jr.score * (1.0 - hunt_weight) + hunt_bonus;
+            let final_score = hunt_s * hunt_weight + jr.score * (1.0 - hunt_weight);
             if let Err(e) = db::update_candidate_judge(candidate.id, final_score, &jr.verdict) {
                 tracing::error!("{ticker} DB 업데이트 실패: {e:#}");
             } else if final_score < min_score {
@@ -188,9 +187,11 @@ pub async fn run_cycle(
         }
     }
 
-    // 4. 척살 (상위 max_survivors만 유지)
-    let max_survivors = crate::storage::with_config(|c| c.watchlist.max_survivors);
-    let culled_excess = db::cull_excess_judged(max_survivors).unwrap_or(0);
+    // 4. 척살 (상위 max_survivors만 유지, 사냥 보너스 적용)
+    let (max_survivors, hunt_count_weight) = crate::storage::with_config(|c| {
+        (c.watchlist.max_survivors, c.watchlist.hunt_count_weight)
+    });
+    let culled_excess = db::cull_excess_judged(max_survivors, hunt_count_weight).unwrap_or(0);
     report.culled += culled_excess;
     report.survived = report.survived.saturating_sub(culled_excess);
 
@@ -320,9 +321,9 @@ pub async fn run_reeval(
         }
     }
 
-    // 척살
+    // 척살 (재평가: 보너스 없이 순수 실력)
     let max_survivors = crate::storage::with_config(|c| c.watchlist.max_survivors);
-    let culled_excess = db::cull_excess_judged(max_survivors).unwrap_or(0);
+    let culled_excess = db::cull_excess_judged(max_survivors, 0.0).unwrap_or(0);
     report.culled += culled_excess;
     report.survived = report.survived.saturating_sub(culled_excess);
 

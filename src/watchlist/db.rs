@@ -158,14 +158,13 @@ pub fn insert_candidate(
             "INSERT INTO candidates (ticker, market, name, sector, reason, hunt_score, prompt_id, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(ticker) DO UPDATE SET
-               name = excluded.name,
-               sector = excluded.sector,
-               reason = excluded.reason,
-               hunt_score = excluded.hunt_score,
-               market = excluded.market,
-               prompt_id = excluded.prompt_id,
-               hunt_count = candidates.hunt_count + 1
-             WHERE candidates.status = 'pending'",
+               hunt_count = candidates.hunt_count + 1,
+               name = CASE WHEN candidates.status = 'pending' THEN excluded.name ELSE candidates.name END,
+               sector = CASE WHEN candidates.status = 'pending' THEN excluded.sector ELSE candidates.sector END,
+               reason = CASE WHEN candidates.status = 'pending' THEN excluded.reason ELSE candidates.reason END,
+               hunt_score = CASE WHEN candidates.status = 'pending' THEN excluded.hunt_score ELSE candidates.hunt_score END,
+               market = CASE WHEN candidates.status = 'pending' THEN excluded.market ELSE candidates.market END,
+               prompt_id = CASE WHEN candidates.status = 'pending' THEN excluded.prompt_id ELSE candidates.prompt_id END",
             params![ticker, market, name, sector, reason, hunt_score, prompt_id, now],
         )?;
         let id: i64 = conn.query_row(
@@ -461,37 +460,43 @@ pub fn clear_all_blacklist() -> Result<usize> {
 // --- 재평가 ---
 
 /// judged 중 점수 상위 max_survivors 외 나머지를 척살
-pub fn cull_excess_judged(max_survivors: usize) -> Result<usize> {
+/// hunt_count_weight > 0: score + ln(1+hunt_count) × weight로 정렬 (사냥 사이클)
+/// hunt_count_weight = 0: score만으로 정렬 (재평가)
+pub fn cull_excess_judged(max_survivors: usize, hunt_count_weight: f64) -> Result<usize> {
+
     with_db(|conn| {
-        // 상위 N개의 id 목록
+        // 전체 judged 로드 후 Rust에서 effective score 정렬 (SQLite에 ln() 없음)
         let mut stmt = conn.prepare(
-            "SELECT id FROM candidates WHERE status = 'judged' ORDER BY score DESC LIMIT ?1",
+            "SELECT id, ticker, score, hunt_count FROM candidates WHERE status = 'judged'",
         )?;
-        let keep_ids: Vec<i64> = stmt
-            .query_map(params![max_survivors as i64], |row| row.get(0))?
+        let mut all: Vec<(i64, String, f64, i64)> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get::<_, f64>(2).unwrap_or(0.0),
+                    row.get::<_, i64>(3).unwrap_or(1),
+                ))
+            })?
             .filter_map(|r| r.ok())
             .collect();
+
+        // effective score 내림차순 정렬
+        all.sort_by(|a, b| {
+            let eff_a = a.2 + (a.3 as f64).ln_1p() * hunt_count_weight;
+            let eff_b = b.2 + (b.3 as f64).ln_1p() * hunt_count_weight;
+            eff_b.partial_cmp(&eff_a).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let keep_ids: Vec<i64> = all.iter().take(max_survivors).map(|x| x.0).collect();
 
         if keep_ids.is_empty() {
             return Ok(0);
         }
 
-        // 척살 대상: judged인데 keep_ids에 없는 것
-        let placeholders = keep_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = format!(
-            "SELECT id, ticker, score FROM candidates WHERE status = 'judged' AND id NOT IN ({placeholders})"
-        );
-        let mut stmt = conn.prepare(&sql)?;
-
-        let params_ref: Vec<Box<dyn rusqlite::types::ToSql>> =
-            keep_ids.iter().map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>).collect();
-        let params_slice: Vec<&dyn rusqlite::types::ToSql> = params_ref.iter().map(|p| p.as_ref()).collect();
-
-        let victims: Vec<(i64, String, f64)> = stmt
-            .query_map(params_slice.as_slice(), |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get::<_, f64>(2).unwrap_or(0.0)))
-            })?
-            .filter_map(|r| r.ok())
+        let victims: Vec<(i64, String, f64)> = all.iter()
+            .skip(max_survivors)
+            .map(|x| (x.0, x.1.clone(), x.2))
             .collect();
 
         let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
@@ -968,14 +973,14 @@ mod tests {
         let id1 = insert_candidate("SOUN", "NAS", "SoundHound", "AI", "voice platform", 75.0, None).unwrap();
         update_candidate_judge(id1, 78.0, "promising").unwrap();
 
-        // judged 상태에서 재삽입 → 무시 (reason/hunt_count 안 바뀜)
+        // judged 상태에서 재삽입 → hunt_count만 +1, 나머지 필드 보호
         let _id2 = insert_candidate("SOUN", "NAS", "SoundHound AI", "AI/Voice", "updated reason", 80.0, None).unwrap();
 
         let c = get_candidate_by_ticker("SOUN").unwrap().unwrap();
         assert_eq!(c.reason, "voice platform"); // 원래 값 유지
         assert_eq!(c.status, CandidateStatus::Judged);
         assert_eq!(c.score, Some(78.0));
-        assert_eq!(c.hunt_count, 1); // 안 올라감
+        assert_eq!(c.hunt_count, 2); // count만 올라감
     }
 
     #[test]
@@ -1187,8 +1192,8 @@ mod tests {
             update_candidate_judge(id, *score, "v").unwrap();
         }
 
-        // Keep top 3
-        let culled = cull_excess_judged(3).unwrap();
+        // Keep top 3 (no bonus)
+        let culled = cull_excess_judged(3, 0.0).unwrap();
         assert_eq!(culled, 2); // T4(60) and T5(50) culled
 
         // Verify survivors
@@ -1205,12 +1210,52 @@ mod tests {
     }
 
     #[test]
+    fn cull_excess_judged_with_bonus_reorders() {
+        setup_test_db();
+        // T1: score=70, count=10 → effective = 70 + ln(11)*3 = 70 + 7.19 = 77.19
+        // T2: score=75, count=1  → effective = 75 + ln(2)*3  = 75 + 2.08 = 77.08
+        // T3: score=60, count=1  → effective = 60 + ln(2)*3  = 60 + 2.08 = 62.08
+        let id1 = insert_candidate("T1", "NAS", "T1", "Sec", "reason", 0.0, None).unwrap();
+        update_candidate_judge(id1, 70.0, "v").unwrap();
+        // bump T1 count to 10 by re-inserting (judged → count +1 each time)
+        for _ in 0..9 {
+            insert_candidate("T1", "NAS", "T1", "Sec", "reason", 0.0, None).unwrap();
+        }
+
+        let id2 = insert_candidate("T2", "NAS", "T2", "Sec", "reason", 0.0, None).unwrap();
+        update_candidate_judge(id2, 75.0, "v").unwrap();
+
+        let id3 = insert_candidate("T3", "NAS", "T3", "Sec", "reason", 0.0, None).unwrap();
+        update_candidate_judge(id3, 60.0, "v").unwrap();
+
+        // without bonus: T2(75) > T1(70) > T3(60) → T3 culled
+        let culled = cull_excess_judged(2, 0.0).unwrap();
+        assert_eq!(culled, 1);
+        assert!(is_blacklisted("T3").unwrap());
+
+        // Reset for bonus test
+        clear_all_blacklist().unwrap();
+        // Restore T3 to judged
+        let id3b = insert_candidate("T3b", "NAS", "T3b", "Sec", "reason", 0.0, None).unwrap();
+        update_candidate_judge(id3b, 60.0, "v").unwrap();
+
+        // with bonus (weight=3.0): T1(77.19) > T2(77.08) > T3b(62.08) → T3b culled
+        // T1 overtakes T2 thanks to hunt_count bonus
+        let culled = cull_excess_judged(2, 3.0).unwrap();
+        assert_eq!(culled, 1);
+        assert!(is_blacklisted("T3b").unwrap());
+        // T1 survived (was lower raw score but higher effective)
+        let c1 = get_candidate_by_ticker("T1").unwrap().unwrap();
+        assert_eq!(c1.status, CandidateStatus::Judged);
+    }
+
+    #[test]
     fn cull_excess_judged_no_op_under_limit() {
         setup_test_db();
         let id = insert_candidate("SOLO", "NAS", "Solo", "Tech", "r", 0.0, None).unwrap();
         update_candidate_judge(id, 75.0, "ok").unwrap();
 
-        let culled = cull_excess_judged(50).unwrap();
+        let culled = cull_excess_judged(50, 0.0).unwrap();
         assert_eq!(culled, 0);
 
         let judged = list_candidates(Some(CandidateStatus::Judged)).unwrap();
@@ -1220,7 +1265,7 @@ mod tests {
     #[test]
     fn cull_excess_judged_empty() {
         setup_test_db();
-        let culled = cull_excess_judged(10).unwrap();
+        let culled = cull_excess_judged(10, 0.0).unwrap();
         assert_eq!(culled, 0);
     }
 
