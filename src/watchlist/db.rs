@@ -164,7 +164,8 @@ pub fn insert_candidate(
                hunt_score = excluded.hunt_score,
                market = excluded.market,
                prompt_id = excluded.prompt_id,
-               hunt_count = candidates.hunt_count + 1",
+               hunt_count = candidates.hunt_count + 1
+             WHERE candidates.status = 'pending'",
             params![ticker, market, name, sector, reason, hunt_score, prompt_id, now],
         )?;
         let id: i64 = conn.query_row(
@@ -945,23 +946,36 @@ mod tests {
     }
 
     #[test]
-    fn candidate_upsert_updates_reason_keeps_status() {
+    fn candidate_upsert_pending_updates_reason() {
         setup_test_db();
         let id1 = insert_candidate("SOUN", "NAS", "SoundHound", "AI", "voice platform", 75.0, None).unwrap();
-        update_candidate_judge(id1, 78.0, "promising").unwrap();
 
-        // 같은 ticker 재삽입 → reason/name/sector 갱신, status/score/verdict 유지
+        // pending 상태에서 재삽입 → 갱신 + hunt_count 누적
         let id2 = insert_candidate("SOUN", "NAS", "SoundHound AI", "AI/Voice", "updated reason", 80.0, None).unwrap();
-        assert_eq!(id1, id2); // 같은 row
+        assert_eq!(id1, id2);
 
         let c = get_candidate_by_ticker("SOUN").unwrap().unwrap();
         assert_eq!(c.reason, "updated reason");
         assert_eq!(c.name, "SoundHound AI");
         assert_eq!(c.sector, "AI/Voice");
-        assert_eq!(c.status, CandidateStatus::Judged); // 유지
-        assert_eq!(c.score, Some(78.0)); // 유지
-        assert_eq!(c.verdict.as_deref(), Some("promising")); // 유지
-        assert_eq!(c.hunt_count, 2); // upsert로 1→2 누적
+        assert_eq!(c.status, CandidateStatus::Pending);
+        assert_eq!(c.hunt_count, 2);
+    }
+
+    #[test]
+    fn candidate_upsert_judged_skipped() {
+        setup_test_db();
+        let id1 = insert_candidate("SOUN", "NAS", "SoundHound", "AI", "voice platform", 75.0, None).unwrap();
+        update_candidate_judge(id1, 78.0, "promising").unwrap();
+
+        // judged 상태에서 재삽입 → 무시 (reason/hunt_count 안 바뀜)
+        let _id2 = insert_candidate("SOUN", "NAS", "SoundHound AI", "AI/Voice", "updated reason", 80.0, None).unwrap();
+
+        let c = get_candidate_by_ticker("SOUN").unwrap().unwrap();
+        assert_eq!(c.reason, "voice platform"); // 원래 값 유지
+        assert_eq!(c.status, CandidateStatus::Judged);
+        assert_eq!(c.score, Some(78.0));
+        assert_eq!(c.hunt_count, 1); // 안 올라감
     }
 
     #[test]

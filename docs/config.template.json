@@ -21,6 +21,7 @@
     "hunt_interval_minutes": 30,
     "min_score": 60.0,
     "hunt_weight": 0.5,
+    "hunt_count_weight": 3.0,
     "retention_days": 100
   },
   "kis_base_url": "https://openapi.koreainvestment.com:9443",

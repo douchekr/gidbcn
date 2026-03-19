@@ -397,7 +397,7 @@ Mutex 없이 채널만으로 동시성 확보.
    ├─ log_api_call("gemini", "hunt") 기록
    ├─ JSON 파싱 → HuntResult[] (ticker, market, name, sector, reason)
    ├─ prompt_history 저장
-   └─ BL 필터링 → candidates(status=pending) 삽입
+   └─ BL 필터링 → candidates(status=pending) 삽입 (pending만 upsert, judged/collected 보호)
 
 2. 수집 — 한투 API [N건, 순차]
    ├─ pending 후보 전부 조회
@@ -411,35 +411,48 @@ Mutex 없이 채널만으로 동시성 확보.
    ├─ log_api_call("gemini", "judge") 기록
    ├─ JSON 파싱 → JudgeResult[] (ticker, score, verdict)
    ├─ score < min_score → BL + status=blacklisted (처단)
-   └─ score >= min_score → status=judged (생존)
+   ├─ score >= min_score → status=judged (생존)
+   └─ 감정 미매칭 (Gemma가 티커 미반환) → BL행 (감정 누락 자동)
 
 4. 도태 — cull_excess_judged(max_survivors)
-   └─ judged 상위 N개만 유지, 나머지 삭제
+   └─ judged 상위 N개만 유지, 나머지 BL행
 ```
 
 ### 점수 계산
 
-2단계 가중 합산: 사냥 매력(hunt 1차 인상평) + 가죽 품질(judge 시장 데이터 기반)
+2단계 가중 합산 + 반복 추천 보너스:
 
 ```
-최종 등급 = 사냥 매력 × w + 가죽 품질 × (1 - w)    (w = hunt_weight, 0.0~1.0)
+기본 점수 = 사냥 매력 × w + 가죽 품질 × (1 - w)    (w = hunt_weight, 0.0~1.0)
+
+사냥 사이클: 최종 등급 = 기본 점수 + ln(1 + hunt_count) × hunt_count_weight
+재평가:      최종 등급 = 기본 점수  (보너스 없음 — 순수 실력 경쟁)
 ```
 
 | hunt_weight | 비율 | 설명 |
 |---|---|---|
 | 0.0 | 사냥 매력 0% : 가죽 품질 100% | 가죽 품질만 반영 |
-| 0.3 | 사냥 매력 30% : 가죽 품질 70% | 가죽 품질 비중 높음 |
 | 0.5 | 사냥 매력 50% : 가죽 품질 50% | 동등 (기본값) |
-| 0.7 | 사냥 매력 70% : 가죽 품질 30% | 사냥 매력 비중 높음 |
 | 1.0 | 사냥 매력 100% : 가죽 품질 0% | 사냥 매력만 반영 |
+
+**hunt_count 보너스** (사냥 사이클 전용):
+| hunt_count | ln(1+count) × 3.0 |
+|---|---|
+| 1 | +2.1점 |
+| 3 | +4.2점 |
+| 10 | +7.2점 |
 
 - `사냥 매력` (hunt_score): 사냥 시 LLM이 프롬프트 기준으로 매긴 확신도 (0–100)
 - `가죽 품질` (judge_score): 수집된 시장 데이터(PER, PBR, EPS 등) 기반 평가 (0–100)
+- `hunt_count`: 사냥에서 반복 추천된 횟수. **pending 상태일 때만 누적** (judged/collected 보호)
 - `min_score` 비교는 최종 등급 기준
+- 사냥에서는 반복 추천 신규가 기존 양피를 밀어낼 수 있고, 재평가에서는 보너스 없이 순수 경쟁
 
 ### 재평가 사이클 (`pipeline::run_reeval`)
 
 KST 02:00, 하루 1회 자동 실행. 스케줄러 진입 조건: `!judge_exhausted()`
+
+**hunt_count 보너스 미적용** — 순수 기본 점수로만 경쟁. 기존 양피가 실력 안 되면 탈락.
 
 ```
 0. revive_near_misses() → 패자 부활 (점수 아깝게 떨어진 BL → pending 복귀)
@@ -448,16 +461,21 @@ KST 02:00, 하루 1회 자동 실행. 스케줄러 진입 조건: `!judge_exhaus
    - API 조회 실패 BL / 수동 BL은 부활 불가 (score 없음)
 1. reset_judged_for_reeval() → 기존 judged 전부 → pending 리셋
 2. 재수집 (사냥 사이클 2단계와 동일)
-3. 재평가 (사냥 사이클 3단계와 동일)
+3. 재평가 (사냥 사이클 3단계와 동일, 단 hunt_count 보너스 없음)
+   - 감정 미매칭 → BL행 (감정 누락 자동)
 4. 도태 (사냥 사이클 4단계와 동일)
 ```
 
 ### 후보 상태 전이
 
 ```
-pending → collected → judged (생존)
-                   → blacklisted (처단: score < min_score)
-pending → blacklisted (수집 실패 → 영구 BL)
+hunt 추천 → pending (신규 insert 또는 pending upsert, judged/collected는 스킵)
+
+pending → collected (수집 성공)
+pending → blacklisted (수집 실패)
+collected → judged (감정 통과)
+collected → blacklisted (감정 미달 or 미매칭)
+judged → blacklisted (cull 도태 or 재감정 미달)
 judged → pending (재평가 리셋) → ...반복
 blacklisted → pending (패자 부활: score >= min_score*0.9 && strike < 3)
 ```

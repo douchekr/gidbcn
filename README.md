@@ -408,6 +408,7 @@ CREATE TABLE signals (
 | `max_judge_calls_per_day` | 14400 | 일일 평가(Gemma) 호출 한도 |
 | `max_survivors` | 50 | 도태 후 생존 상한 |
 | `hunt_weight` | 0.5 | hunt 점수 비율 (0.0~1.0, 0.5=동등) |
+| `hunt_count_weight` | 3.0 | 반복 추천 보너스 계수 (ln(1+count)×weight, 0=비활성) |
 | `candidate_count` | 30 | 사냥당 후보 수 |
 | `hunt_interval_minutes` | 30 | 사냥 주기 (분) |
 | `min_score` | 60.0 | 처단 기준 점수 |

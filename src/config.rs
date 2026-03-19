@@ -114,6 +114,8 @@ pub struct WatchlistConfig {
     pub max_survivors: usize,
     #[serde(default = "default_hunt_weight")]
     pub hunt_weight: f64,
+    #[serde(default = "default_hunt_count_weight")]
+    pub hunt_count_weight: f64,
 }
 
 impl Default for WatchlistConfig {
@@ -129,6 +131,7 @@ impl Default for WatchlistConfig {
             hunt_models: default_hunt_models(),
             max_survivors: default_max_survivors(),
             hunt_weight: default_hunt_weight(),
+            hunt_count_weight: default_hunt_count_weight(),
         }
     }
 }
@@ -147,6 +150,7 @@ fn default_hunt_models() -> Vec<String> {
 }
 fn default_max_survivors() -> usize { 50 }
 fn default_hunt_weight() -> f64 { 0.5 }
+fn default_hunt_count_weight() -> f64 { 3.0 }
 
 // --- 디스크 포맷: BootConfig ---
 // secrets 필드가 object면 평문, string이면 암호화
