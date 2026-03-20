@@ -31,7 +31,7 @@ impl EvalReport {
         let err = if self.collect_failed == 0 { String::new() } else { format!(" ❗{}", self.collect_failed) };
         let rev = if self.revived == 0 { String::new() } else { format!(" 🔁해제 +{}", self.revived) };
         format!(
-            "🔄 감정 보고 (대상 {}마리{rev} → 📦수집 +{} → 🦎양피 +{} 🗡️척살 +{}{})",
+            "🔄 가죽 점검 (대상 {}마리{rev} → 📦수집 +{} → 🦎양피 +{} 🗡️척살 +{}{})",
             self.target, self.collected, self.survived, self.culled, err,
         )
     }
@@ -311,7 +311,7 @@ mod tests {
             target: 50, revived: 3, collected: 45, survived: 30, culled: 15, collect_failed: 5,
         };
         let summary = report.summary();
-        assert!(summary.contains("감정 보고"));
+        assert!(summary.contains("가죽 점검"));
         assert!(summary.contains("50마리"));
         assert!(summary.contains("해제 +3"));
         assert!(summary.contains("수집 +45"));

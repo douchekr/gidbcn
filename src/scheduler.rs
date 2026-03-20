@@ -126,7 +126,7 @@ async fn run_eval_cycle(api: &ApiHandle, bot: &Bot) {
         Err(e) => {
             tracing::error!("Evaluate cycle failed: {e:#}");
             if owner_id != 0 {
-                let _ = bot.send_message(ChatId(owner_id), format!("❌ 감정 실패: {e:#}")).await;
+                let _ = bot.send_message(ChatId(owner_id), format!("❌ 가죽 점검 실패: {e:#}")).await;
             }
         }
     }
