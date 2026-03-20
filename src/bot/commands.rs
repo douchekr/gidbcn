@@ -1467,13 +1467,14 @@ fn cmd_watch_info(ticker: &str) -> String {
     let score = candidate.score.map_or("-".to_string(), |s| format!("{s:.0}"));
     let verdict = candidate.verdict.as_deref().unwrap_or("-");
     let status = candidate.status.as_str();
+    let hunt_n = if candidate.hunt_count > 1 { format!(" (×{})", candidate.hunt_count) } else { String::new() };
     format!(
         "🔍 {ticker}\n\
          이름: {}\n\
          섹터: {}\n\
          상태: {status}\n\
-         사냥 매력: {hunt_s}\n\
-         최종 등급: {score}\n\
+         포획 점수: {hunt_s}{hunt_n}\n\
+         가죽 품질: {score}\n\
          판결: {verdict}\n\
          사유: {}\n\
          등록: {}",
