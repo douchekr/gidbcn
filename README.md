@@ -59,7 +59,7 @@ src/
 │   ├── engine.rs      ← 시그널 조건 평가
 │   └── price.rs       ← price_above/below, profit_above/below
 ├── watchlist/
-│   ├── pipeline.rs    ← 사냥/재평가 사이클
+│   ├── pipeline.rs    ← 사냥(run_hunt) / 가죽 작업(run_evaluate) 독립 사이클
 │   ├── gemini.rs      ← Google AI Studio API 호출
 │   ├── db.rs          ← 워치리스트 SQLite CRUD
 │   └── models.rs      ← Candidate, HuntResult, JudgeResult
@@ -155,7 +155,7 @@ CREATE TABLE candidates (
     ticker TEXT NOT NULL UNIQUE, market TEXT, name TEXT,
     sector TEXT, reason TEXT, hunt_score REAL,
     score REAL, verdict TEXT,
-    status TEXT NOT NULL DEFAULT 'pending',  -- pending/collected/judged/blacklisted
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending/judged/blacklisted
     prompt_id INTEGER, created_at TEXT NOT NULL,
     judged_at TEXT, detail_text TEXT DEFAULT '',
     hunt_count INTEGER NOT NULL DEFAULT 1
@@ -184,8 +184,7 @@ CREATE TABLE candidates (
 | `max_hunt_calls_per_day` | 20 | 일일 사냥 호출 한도 |
 | `max_judge_calls_per_day` | 14400 | 일일 평가 호출 한도 |
 | `max_survivors` | 50 | 도태 후 생존 상한 |
-| `hunt_weight` | 0.5 | hunt 점수 비율 (0.0~1.0) |
-| `hunt_count_weight` | 3.0 | 반복 추천 보너스 계수 (도태 판정 전용, 0=비활성) |
+| `hunt_count_weight` | 3.0 | 반복 추천 보너스 계수 (도태 판정용) |
 | `candidate_count` | 30 | 사냥당 후보 수 |
 | `hunt_interval_minutes` | 30 | 사냥 주기 (분) |
 | `min_score` | 60.0 | 척살 기준 점수 |
@@ -220,9 +219,10 @@ CREATE TABLE candidates (
 |---|---|
 | `/w run` | 사냥 시작 (즉시 1회 + 자동 주기) |
 | `/w stop` | 사냥 중지 |
-| `/w ls` | 양피 목록 (점수순) |
+| `/w ls` | 가죽 목록 (점수순) |
+| `/w pending` | 포획 성공 현황 (hunt_score순) |
 | `/w info [TICKER]` | 종목 상세 |
-| `/w bl` / `/w bl add` / `/w bl rm` | 블랙리스트 관리 |
+| `/w bl` / `/w bl add` / `/w bl rm` | 블랙리스트 관리 (수동 BL = 영구) |
 | `/w budget` | API 사용량 |
 | `/w prompt hunt\|judge show\|set` | 프롬프트 관리 |
 | `/w hist` | Gemini 호출 이력 |
@@ -243,8 +243,8 @@ CREATE TABLE candidates (
 | 작업 | 주기 | 조건 |
 |------|------|------|
 | 시그널 체크 | 5분 | 장중 (KRX 09:00~15:30, US 22:30~05:00 KST) |
-| 사냥 사이클 | 30분 | discovery_enabled && prompts OK && 한도 미초과 |
-| 재평가 | KST 02:00 하루 1회 | discovery_enabled && judge 한도 미초과 |
+| 사냥 사이클 | 30분 | discovery_enabled && prompts OK && hunt 한도 미초과 |
+| 가죽 작업 | KST 02:00, 14:00 하루 2회 | discovery_enabled && judge 한도 미초과 |
 | 토큰 갱신 | 매 요청 전 체크 | 만료 1시간 전 자동 |
 
 ---
@@ -255,7 +255,7 @@ CREATE TABLE candidates (
 - **429 PerMinute**: `retryDelay + 5초` 대기 → 같은 모델 1회 재시도
 - **429 RPD 등**: 즉시 다음 모델 폴백
 - **모델 폴백**: config 배열 순회 (당일 성공 모델 우선)
-- **재평가 배치**: `candidate_count` 단위 분할, 배치 간 60초 대기
+- **가죽 작업 배치**: `candidate_count` 단위 분할, 배치 간 60초 대기
 
 ---
 
