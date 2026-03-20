@@ -12,7 +12,7 @@ pub struct HuntReport {
 
 impl HuntReport {
     pub fn summary(&self) -> String {
-        format!("🎯 사냥 보고 (🔍포착 +{})", self.hunted)
+        format!("🎯 사냥 보고 (🔍포획 +{})", self.hunted)
     }
 }
 
@@ -31,7 +31,7 @@ impl EvalReport {
         let err = if self.collect_failed == 0 { String::new() } else { format!(" ❗{}", self.collect_failed) };
         let rev = if self.revived == 0 { String::new() } else { format!(" 🔁해제 +{}", self.revived) };
         format!(
-            "🔄 가죽 점검 (대상 {}마리{rev} → 📦수집 +{} → 🦎양피 +{} 🗡️척살 +{}{})",
+            "🔄 가죽 작업 (대상 {}마리{rev} → 📦수집 +{} → 🦎가죽 +{} 🗡️척살 +{}{})",
             self.target, self.collected, self.survived, self.culled, err,
         )
     }
@@ -113,7 +113,7 @@ pub async fn run_hunt(
 
     let report = HuntReport { hunted: hunt_results.len() };
 
-    tracing::info!("사냥 완료: {}개 포착", report.hunted);
+    tracing::info!("사냥 완료: {}개 포획", report.hunted);
 
     Ok(report)
 }
@@ -302,7 +302,7 @@ mod tests {
         let report = HuntReport { hunted: 30 };
         let summary = report.summary();
         assert!(summary.contains("사냥 보고"));
-        assert!(summary.contains("포착 +30"));
+        assert!(summary.contains("포획 +30"));
     }
 
     #[test]
@@ -311,11 +311,11 @@ mod tests {
             target: 50, revived: 3, collected: 45, survived: 30, culled: 15, collect_failed: 5,
         };
         let summary = report.summary();
-        assert!(summary.contains("가죽 점검"));
+        assert!(summary.contains("가죽 작업"));
         assert!(summary.contains("50마리"));
         assert!(summary.contains("해제 +3"));
         assert!(summary.contains("수집 +45"));
-        assert!(summary.contains("🦎양피 +30"));
+        assert!(summary.contains("🦎가죽 +30"));
         assert!(summary.contains("🗡️척살 +15"));
         assert!(summary.contains("❗5"));
     }
