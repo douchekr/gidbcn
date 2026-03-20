@@ -1333,6 +1333,7 @@ async fn cmd_watchlist(
             "⏹ 은신처 복귀. 오늘은 여기까지다.".to_string()
         }
         "list" | "ls" => cmd_watch_list(),
+        "pending" | "pd" => cmd_watch_pending(),
         "info" | "i" => cmd_watch_info(&rest.to_uppercase()),
         "export" | "ex" => cmd_watch_export(),
         "blacklist" | "bl" => cmd_watch_blacklist(&rest),
@@ -1344,6 +1345,7 @@ async fn cmd_watchlist(
               /w run — 사냥 출발\n\
               /w stop — 은신처 복귀\n\
               /w ls — 가죽 확보 현황\n\
+              /w pending — 포획 성공 현황\n\
               /w export — CSV 내보내기\n\
               /w info [TICKER] — 종목 상세\n\
               /w bl — 독도마뱀\n\
@@ -1387,6 +1389,40 @@ fn cmd_watch_list() -> String {
         msg.push_str(&format!(
             "\n{bob}{}. {} ({}{hunt_n}) [{score}점]\n   {reason_short}",
             i + 1, c.ticker, c.sector,
+        ));
+    }
+    msg
+}
+
+fn cmd_watch_pending() -> String {
+    use crate::watchlist::models::CandidateStatus;
+    let mut candidates = match wdb::list_candidates(Some(CandidateStatus::Pending)) {
+        Ok(c) => c,
+        Err(e) => return format!("조회 실패: {e:#}"),
+    };
+    if candidates.is_empty() {
+        return "포획 성공 중인 게코가 없다.".to_string();
+    }
+    // hunt_score 내림차순, 같으면 hunt_count 내림차순
+    candidates.sort_by(|a, b| {
+        let sa = a.hunt_score.unwrap_or(0.0);
+        let sb = b.hunt_score.unwrap_or(0.0);
+        sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+            .then(b.hunt_count.cmp(&a.hunt_count))
+    });
+    let total = candidates.len();
+    let mut msg = if total > 30 {
+        format!("🔍 포획 성공 ({total}마리) — 상위 30마리\n")
+    } else {
+        format!("🔍 포획 성공 ({total}마리)\n")
+    };
+    for (i, c) in candidates.iter().enumerate().take(30) {
+        let score = c.hunt_score.map_or("-".to_string(), |s| format!("{s:.0}"));
+        let hunt_n = if c.hunt_count > 1 { format!(" ×{}", c.hunt_count) } else { String::new() };
+        let reason_short = truncate_chars(&c.reason, 40);
+        msg.push_str(&format!(
+            "\n{}. {} [{}점{hunt_n}] {}\n   {reason_short}",
+            i + 1, c.ticker, score, c.sector,
         ));
     }
     msg
