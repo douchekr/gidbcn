@@ -235,6 +235,16 @@ pub fn update_detail_text(id: i64, detail_text: &str) -> Result<()> {
     })
 }
 
+pub fn clear_candidate_score(id: i64) -> Result<()> {
+    with_db(|conn| {
+        conn.execute(
+            "UPDATE candidates SET score = NULL, verdict = NULL WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    })
+}
+
 pub fn update_candidate_status(id: i64, status: CandidateStatus) -> Result<()> {
     with_db(|conn| {
         conn.execute(

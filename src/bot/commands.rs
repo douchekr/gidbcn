@@ -1490,8 +1490,16 @@ fn cmd_watch_blacklist(args: &str) -> String {
                 None => return "사용법: /w bl add [TICKER] [사유]".to_string(),
             };
             let reason = parts.get(2..).map(|p| p.join(" ")).unwrap_or_default();
+            let reason = if reason.is_empty() { "수동 척살".to_string() } else { reason };
             match wdb::add_blacklist(&ticker, &reason) {
-                Ok(_) => format!("✅ {ticker} 독도마뱀 판정"),
+                Ok(_) => {
+                    // candidates status → BL + score NULL (영구: revive 대상 제외)
+                    if let Ok(Some(c)) = wdb::get_candidate_by_ticker(&ticker) {
+                        let _ = wdb::update_candidate_status(c.id, crate::watchlist::models::CandidateStatus::Blacklisted);
+                        let _ = wdb::clear_candidate_score(c.id);
+                    }
+                    format!("✅ {ticker} 독도마뱀 판정 (영구)")
+                }
                 Err(e) => format!("실패: {e:#}"),
             }
         }

@@ -200,6 +200,7 @@ effective  = score + ln(1 + hunt_count) × weight    ← 도태 판정용
 | **hunt_count 보너스** | 도태(cull) | 반복 추천 종목 보호. ln 포화 (count=100 → +13.8 한계) |
 | **삼진아웃 (strike ≥ 3)** | 부활 판정 | 3회 척살 → 부활 불가. retention(100일) 후 자연소멸 |
 | **수집 실패** | 수집 | pending → 영구 BL (score=NULL → 부활 불가) |
+| **수동 척살** | `/w bl add` | 영구 BL (score=NULL, 수집 실패와 동일 경로) |
 
 ### Gemini 429 대응 + 모델 폴백
 
