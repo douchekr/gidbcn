@@ -112,8 +112,6 @@ pub struct WatchlistConfig {
     pub hunt_models: Vec<String>,
     #[serde(default = "default_max_survivors")]
     pub max_survivors: usize,
-    #[serde(default = "default_hunt_weight")]
-    pub hunt_weight: f64,
     #[serde(default = "default_hunt_count_weight")]
     pub hunt_count_weight: f64,
 }
@@ -130,7 +128,6 @@ impl Default for WatchlistConfig {
             judge_models: default_judge_models(),
             hunt_models: default_hunt_models(),
             max_survivors: default_max_survivors(),
-            hunt_weight: default_hunt_weight(),
             hunt_count_weight: default_hunt_count_weight(),
         }
     }
@@ -149,7 +146,6 @@ fn default_hunt_models() -> Vec<String> {
     vec!["gemini-2.5-flash-lite".to_string()]
 }
 fn default_max_survivors() -> usize { 50 }
-fn default_hunt_weight() -> f64 { 0.5 }
 fn default_hunt_count_weight() -> f64 { 3.0 }
 
 // --- 디스크 포맷: BootConfig ---

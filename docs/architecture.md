@@ -162,95 +162,47 @@ CART/BOND: `Market::is_open_now()` = false → 시그널 엔진에서 개별 스
 Google AI Studio (Flash Lite + Gemma) + 한투 API 조합.
 프롬프트 미설정 시 동작 불가 (hunt/judge 각각 필수).
 
-### 사냥 사이클 (`pipeline::run_cycle`)
+### 두 개의 독립 사이클
+
+| 사이클 | 함수 | 주기 | 역할 |
+|--------|------|------|------|
+| 사냥 | `run_hunt` | 30분 (설정 가능) | Gemini 추천 → pending 삽입 |
+| 감정 | `run_evaluate` | 하루 2회 (KST 02:00, 14:00) | 수집 + 감정 + 도태 |
+
+사냥 실패해도 감정은 독립 실행. 감정이 오래 걸려도 사냥에 영향 없음.
+
+### 파이프라인과 상태 전이
+
+상태 3개: `pending`, `judged`, `blacklisted`
 
 ```
-0. cleanup_old_data(retention_days)
+사냥 사이클:
+  Gemini 추천 → pending (hunt_count +1)
 
-1. 사냥 — gemini::hunt() [Flash Lite, 1콜]
-   프롬프트 + BL 목록 → Flash Lite → JSON 파싱 → HuntResult[]
-   BL 필터링 → candidates(pending) 삽입
-   ※ 상태 불문 hunt_count +1 (judged/collected 필드는 보호)
-
-2. 수집 — 한투 API [pending 전부, 순차]
-   fetch_detail(ticker, market_hint) → NAS→NYS→AMS 순회
-   성공: collected + detail_text 저장
-   실패: BL행
-
-3. 평가 — gemini::judge() [Gemma, 1콜, 이번 사이클 수집분만]
-   collected의 detail_text 합쳐서 Gemma → JudgeResult[]
-   최종 등급 = hunt_score × W + judge_score × (1-W)  ← DB 저장 (보너스 미포함)
-   score < min_score → 척살 (BL행)
-   score >= min_score → 양피 (judged)
-   감정 미매칭 → BL행
-
-4. 도태 — cull_excess_judged(max_survivors, hunt_count_weight)
-   effective = score + ln(1+hunt_count) × weight  ← 동적 계산 (사냥 보너스)
-   상위 N개만 유지, 나머지 BL행
+감정 사이클:
+  ① 부활: BL → pending            (score ≥ min×0.9, strike < 3)
+  ② 수집: pending/judged → 한투 API
+     pending 실패 → BL (영구)      judged 실패 → 스킵
+  ③ 감정: score < min → BL        score ≥ min → judged
+  ④ 도태: 상위 N 외 → BL          (effective score 기준)
 ```
 
-### 재평가 사이클 (`pipeline::run_reeval`, KST 02:00 하루 1회)
-
-**hunt_count 보너스 미적용** — 순수 기본 점수로만 경쟁.
+### 점수와 보너스/감점
 
 ```
-0. revive_near_misses() — 패자 부활 (score >= min_score*0.9 && strike < 3)
-1. reset_judged_for_reeval() — judged 전부 → pending
-2. 재수집 (사냥 사이클 2단계와 동일)
-3. 재평가 (배치 분할: candidate_count 단위, 60초 간격, 보너스 없음)
-4. 도태 — cull_excess_judged(max_survivors, 0.0)  ← 보너스 없이 순수 score
+score(DB) = judge_score                            ← 순수 데이터 평가
+effective  = score + ln(1 + hunt_count) × weight    ← 도태 판정용
 ```
 
-### 점수 계산
+| 요인 | 적용 시점 | 효과 |
+|------|----------|------|
+| **min_score (60)** | 감정 직후 | 절대 마지노선. 미달 즉시 BL. 보너스 무관 |
+| **hunt_count 보너스** | 도태(cull) | 반복 추천 종목 보호. ln 포화 (count=100 → +13.8 한계) |
+| **삼진아웃 (strike ≥ 3)** | 부활 판정 | 3회 척살 → 부활 불가. retention(100일) 후 자연소멸 |
+| **수집 실패** | 수집 | pending → 영구 BL (score=NULL → 부활 불가) |
 
-```
-최종 등급(DB) = 사냥 매력 × w + 가죽 품질 × (1-w)    (w = hunt_weight, 기본 0.5)
+### Gemini 429 대응 + 모델 폴백
 
-척살 판정: 최종 등급 < min_score → BL행 (보너스 무관)
-
-도태(cull) 판정:
-  사냥 사이클: effective = 최종 등급 + ln(1+hunt_count) × hunt_count_weight
-  재평가:      effective = 최종 등급  (보너스 없음)
-```
-
-**hunt_count 보너스** (사냥 도태 전용, weight=3.0):
-| count | 보너스 |
-|-------|--------|
-| 1 | +2.1 |
-| 5 | +5.4 |
-| 10 | +7.2 |
-
-- `hunt_count`: 사냥 추천 시 **상태 불문** 항상 +1 (BL은 필터링으로 미도달)
-- 패자 부활 시 count 유지 (리셋 안 됨)
-- 사냥 도태에서 반복 추천 신규가 기존 양피를 밀어냄
-- 재평가 도태에서는 순수 경쟁 → 보너스로 진입한 놈이 실력 없으면 탈락
-
-### 후보 상태 전이
-
-```
-hunt 추천 → pending  (신규 insert, 기존은 count만 +1)
-
-pending → collected    (수집 성공)
-pending → blacklisted  (수집 실패)
-collected → judged     (감정 통과)
-collected → blacklisted (감정 미달/미매칭)
-judged → blacklisted   (cull 도태 or 재감정 미달)
-judged → pending       (재평가 리셋)
-blacklisted → pending  (패자 부활: score >= min_score*0.9 && strike < 3)
-```
-
-### Gemini 한도 체크 (이중)
-
-| API | 본체 (gemini.rs) | 사전필터 (scheduler.rs) |
-|-----|-----------------|----------------------|
-| hunt | `hunt()` 진입부 | 사냥 사이클 진입 시 |
-| judge | `judge()` 진입부 | 사냥/재평가 사이클 진입 시 |
-
-### 429 대응
-- **PerMinute**: retryDelay + 5초 대기 → 같은 모델 1회 재시도
-- **RPD 등**: 즉시 다음 모델 폴백
-- 전 모델 실패 → 마지막 에러 반환
-
-### 모델 폴백
-config 배열 순회. 당일 성공 모델 우선, 다음날(태평양시간 자정) 리셋.
-Gemini 호출은 API Actor 미경유 (별도 reqwest::Client).
+- **PerMinute 429**: retryDelay + 5초 대기 → 같은 모델 1회 재시도
+- **PerDay 등**: 즉시 다음 모델 폴백
+- config 배열 순회, 당일 성공 모델 우선. Gemini 호출은 API Actor 미경유.

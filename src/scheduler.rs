@@ -24,9 +24,9 @@ pub async fn run_scheduler(
     let hunt_min = storage::with_config(|c| c.watchlist.hunt_interval_minutes);
     let mut hunt_tick = interval(Duration::from_secs(hunt_min * 60));
 
-    // 재평가: 1분마다 체크, KST 02:00(= ET 12:00)에 하루 1회 실행
-    let mut reeval_tick = interval(Duration::from_secs(60));
-    let mut last_reeval_date = String::new();
+    // 감정 사이클: 1분마다 체크, KST 02:00 / 14:00 하루 2회
+    let mut eval_tick = interval(Duration::from_secs(60));
+    let mut last_eval_slot = String::new();
 
     tracing::info!("Scheduler started: signal {}min, hunt {}min", interval_min, hunt_min);
 
@@ -46,23 +46,26 @@ pub async fn run_scheduler(
                 }
             }
             _ = hunt_tick.tick() => {
-                if discovery_enabled.load(Ordering::SeqCst) && prompts_configured() && !hunt_exhausted() && !judge_exhausted() {
-                    run_hunt_cycle(&api, &bot).await;
+                if discovery_enabled.load(Ordering::SeqCst) && prompts_configured() && !hunt_exhausted() {
+                    run_hunt_cycle(&bot).await;
                 }
             }
             _ = discovery_trigger.notified() => {
-                if !hunt_exhausted() && !judge_exhausted() {
-                    run_hunt_cycle(&api, &bot).await;
+                if !hunt_exhausted() {
+                    run_hunt_cycle(&bot).await;
                 }
             }
-            _ = reeval_tick.tick() => {
+            _ = eval_tick.tick() => {
                 if discovery_enabled.load(Ordering::SeqCst) && prompts_configured() {
                     let kst = kst_now();
-                    let today = kst.format("%Y-%m-%d").to_string();
-                    // KST 02:00 = ET 12:00 (서머타임), 하루 1회
-                    if kst.hour() == 2 && last_reeval_date != today && !judge_exhausted() {
-                        last_reeval_date = today;
-                        run_reeval_cycle(&api, &bot).await;
+                    let hour = kst.hour();
+                    // KST 02:00 / 14:00 하루 2회
+                    if (hour == 2 || hour == 14) && !judge_exhausted() {
+                        let slot = format!("{}-{:02}", kst.format("%Y-%m-%d"), hour);
+                        if last_eval_slot != slot {
+                            last_eval_slot = slot;
+                            run_eval_cycle(&api, &bot).await;
+                        }
                     }
                 }
             }
@@ -85,12 +88,12 @@ fn prompts_configured() -> bool {
         && wdb::get_prompt(PromptType::Judge).ok().flatten().is_some()
 }
 
-async fn run_hunt_cycle(api: &ApiHandle, bot: &Bot) {
+async fn run_hunt_cycle(bot: &Bot) {
     tracing::info!("Running hunt cycle...");
     let client = reqwest::Client::new();
     let owner_id = storage::with_config(|c| c.telegram.owner_chat_id);
 
-    match pipeline::run_cycle(api, &client).await {
+    match pipeline::run_hunt(&client).await {
         Ok(report) => {
             let msg = report.summary();
             tracing::info!("{msg}");
@@ -107,12 +110,12 @@ async fn run_hunt_cycle(api: &ApiHandle, bot: &Bot) {
     }
 }
 
-async fn run_reeval_cycle(api: &ApiHandle, bot: &Bot) {
-    tracing::info!("Running reeval cycle...");
+async fn run_eval_cycle(api: &ApiHandle, bot: &Bot) {
+    tracing::info!("Running evaluate cycle...");
     let client = reqwest::Client::new();
     let owner_id = storage::with_config(|c| c.telegram.owner_chat_id);
 
-    match pipeline::run_reeval(api, &client).await {
+    match pipeline::run_evaluate(api, &client).await {
         Ok(report) => {
             let msg = report.summary();
             tracing::info!("{msg}");
@@ -121,9 +124,9 @@ async fn run_reeval_cycle(api: &ApiHandle, bot: &Bot) {
             }
         }
         Err(e) => {
-            tracing::error!("Reeval cycle failed: {e:#}");
+            tracing::error!("Evaluate cycle failed: {e:#}");
             if owner_id != 0 {
-                let _ = bot.send_message(ChatId(owner_id), format!("❌ 재평가 실패: {e:#}")).await;
+                let _ = bot.send_message(ChatId(owner_id), format!("❌ 감정 실패: {e:#}")).await;
             }
         }
     }

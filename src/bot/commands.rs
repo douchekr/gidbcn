@@ -1366,10 +1366,9 @@ fn cmd_watch_list() -> String {
         Err(e) => return format!("조회 실패: {e:#}"),
     };
     if candidates.is_empty() {
-        let in_progress = wdb::count_candidates_by_status(CandidateStatus::Pending).unwrap_or(0)
-            + wdb::count_candidates_by_status(CandidateStatus::Collected).unwrap_or(0);
+        let in_progress = wdb::count_candidates_by_status(CandidateStatus::Pending).unwrap_or(0);
         if in_progress > 0 {
-            return "게코를 잡았지만 아직 가죽을 벗기지 못했다.".to_string();
+            return "게코를 발견했지만 아직 감정하지 못했다.".to_string();
         }
         return "포획된 게코가 없다. /w run 으로 사냥을 시작하라.".to_string();
     }

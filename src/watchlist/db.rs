@@ -225,10 +225,10 @@ pub fn update_candidate_judge(id: i64, score: f64, verdict: &str) -> Result<()> 
     })
 }
 
-pub fn update_candidate_collected(id: i64, detail_text: &str) -> Result<()> {
+pub fn update_detail_text(id: i64, detail_text: &str) -> Result<()> {
     with_db(|conn| {
         conn.execute(
-            "UPDATE candidates SET status = 'collected', detail_text = ?1 WHERE id = ?2",
+            "UPDATE candidates SET detail_text = ?1 WHERE id = ?2",
             params![detail_text, id],
         )?;
         Ok(())
@@ -460,8 +460,7 @@ pub fn clear_all_blacklist() -> Result<usize> {
 // --- 재평가 ---
 
 /// judged 중 점수 상위 max_survivors 외 나머지를 척살
-/// hunt_count_weight > 0: score + ln(1+hunt_count) × weight로 정렬 (사냥 사이클)
-/// hunt_count_weight = 0: score만으로 정렬 (재평가)
+/// effective = score + ln(1+hunt_count) × hunt_count_weight
 pub fn cull_excess_judged(max_survivors: usize, hunt_count_weight: f64) -> Result<usize> {
 
     with_db(|conn| {
@@ -522,17 +521,6 @@ pub fn cull_excess_judged(max_survivors: usize, hunt_count_weight: f64) -> Resul
             tracing::info!("척살: {culled}개 (상위 {max_survivors}개 유지)");
         }
         Ok(culled)
-    })
-}
-
-/// judged 후보를 재평가 대상(collected)으로 리셋
-pub fn reset_judged_for_reeval() -> Result<usize> {
-    with_db(|conn| {
-        let n = conn.execute(
-            "UPDATE candidates SET status = 'pending', detail_text = '' WHERE status = 'judged'",
-            [],
-        )?;
-        Ok(n)
     })
 }
 
@@ -1123,12 +1111,12 @@ mod tests {
     }
 
     #[test]
-    fn candidate_collected_status() {
+    fn candidate_detail_text_update() {
         setup_test_db();
         let id = insert_candidate("TSLA", "NAS", "Tesla", "EV", "growth", 0.0, None).unwrap();
-        update_candidate_collected(id, "Price: $8.50\nPER: 12").unwrap();
+        update_detail_text(id, "Price: $8.50\nPER: 12").unwrap();
         let c = get_candidate_by_ticker("TSLA").unwrap().unwrap();
-        assert_eq!(c.status, CandidateStatus::Collected);
+        assert_eq!(c.status, CandidateStatus::Pending); // 상태 변경 없음
         assert!(c.detail_text.contains("Price: $8.50"));
     }
 
@@ -1267,37 +1255,6 @@ mod tests {
         setup_test_db();
         let culled = cull_excess_judged(10, 0.0).unwrap();
         assert_eq!(culled, 0);
-    }
-
-    #[test]
-    fn reset_judged_for_reeval() {
-        setup_test_db();
-        let id1 = insert_candidate("RE1", "NAS", "Re1", "Tech", "r", 0.0, None).unwrap();
-        let id2 = insert_candidate("RE2", "NYS", "Re2", "Fin", "r", 0.0, None).unwrap();
-        let _id3 = insert_candidate("PE1", "AMS", "Pe1", "Bio", "r", 0.0, None).unwrap();
-
-        update_candidate_judge(id1, 80.0, "good").unwrap();
-        update_candidate_judge(id2, 70.0, "ok").unwrap();
-        // id3 stays pending
-
-        let reset = super::reset_judged_for_reeval().unwrap();
-        assert_eq!(reset, 2);
-
-        // judged → pending with empty detail_text
-        let c1 = get_candidate_by_ticker("RE1").unwrap().unwrap();
-        assert_eq!(c1.status, CandidateStatus::Pending);
-        assert_eq!(c1.detail_text, "");
-
-        // pending stays pending
-        let c3 = get_candidate_by_ticker("PE1").unwrap().unwrap();
-        assert_eq!(c3.status, CandidateStatus::Pending);
-    }
-
-    #[test]
-    fn reset_judged_for_reeval_empty() {
-        setup_test_db();
-        let reset = super::reset_judged_for_reeval().unwrap();
-        assert_eq!(reset, 0);
     }
 
     #[test]
