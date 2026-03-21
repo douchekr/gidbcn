@@ -261,7 +261,7 @@ pub async fn hunt(client: &reqwest::Client) -> Result<Vec<HuntResult>> {
             tracing::info!("사냥 결과 블랙리스트 제외: {ticker}");
             continue;
         }
-        let _ = db::insert_candidate(&ticker, &r.market, &r.name, &r.sector, &r.reason, r.score, Some(prompt_id));
+        let _ = db::insert_pending(&ticker, &r.market, &r.name, &r.sector, &r.reason, r.score, Some(prompt_id));
         saved.push(r.clone());
     }
 

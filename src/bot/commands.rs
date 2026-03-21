@@ -1355,7 +1355,7 @@ async fn cmd_watchlist(
               /w prompt hunt show|set\n\
               /w prompt judge show|set\n\
               /w hist — 최근 호출 이력\n\
-              /w clear pending|judged|bl — 일괄 삭제"
+              /w clear judged|bl — 일괄 삭제"
             .to_string(),
     }
 }
@@ -1368,7 +1368,7 @@ fn cmd_watch_list() -> String {
         Err(e) => return format!("조회 실패: {e:#}"),
     };
     if candidates.is_empty() {
-        let in_progress = wdb::count_candidates_by_status(CandidateStatus::Pending).unwrap_or(0);
+        let in_progress = wdb::count_pending().unwrap_or(0);
         if in_progress > 0 {
             return "게코를 포획했지만 아직 가죽을 벗기지 못했다.".to_string();
         }
@@ -1395,28 +1395,27 @@ fn cmd_watch_list() -> String {
 }
 
 fn cmd_watch_pending() -> String {
-    use crate::watchlist::models::CandidateStatus;
-    let mut candidates = match wdb::list_candidates(Some(CandidateStatus::Pending)) {
+    let mut entries = match wdb::list_pending() {
         Ok(c) => c,
         Err(e) => return format!("조회 실패: {e:#}"),
     };
-    if candidates.is_empty() {
+    if entries.is_empty() {
         return "포획 성공 중인 게코가 없다.".to_string();
     }
     // hunt_score 내림차순, 같으면 hunt_count 내림차순
-    candidates.sort_by(|a, b| {
+    entries.sort_by(|a, b| {
         let sa = a.hunt_score.unwrap_or(0.0);
         let sb = b.hunt_score.unwrap_or(0.0);
         sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
             .then(b.hunt_count.cmp(&a.hunt_count))
     });
-    let total = candidates.len();
+    let total = entries.len();
     let mut msg = if total > 30 {
         format!("🔍 포획 성공 ({total}마리) — 상위 30마리\n")
     } else {
         format!("🔍 포획 성공 ({total}마리)\n")
     };
-    for (i, c) in candidates.iter().enumerate().take(30) {
+    for (i, c) in entries.iter().enumerate().take(30) {
         let score = c.hunt_score.map_or("-".to_string(), |s| format!("{s:.0}"));
         let hunt_n = if c.hunt_count > 1 { format!(" ×{}", c.hunt_count) } else { String::new() };
         let reason_short = truncate_chars(&c.reason, 40);
@@ -1458,28 +1457,41 @@ fn cmd_watch_info(ticker: &str) -> String {
     if ticker.is_empty() {
         return "사용법: /w info [TICKER]".to_string();
     }
-    let candidate = match wdb::get_candidate_by_ticker(ticker) {
-        Ok(Some(c)) => c,
-        Ok(None) => return format!("{ticker} 을(를) 찾을 수 없습니다."),
-        Err(e) => return format!("조회 실패: {e:#}"),
-    };
-    let hunt_s = candidate.hunt_score.map_or("-".to_string(), |s| format!("{s:.0}"));
-    let score = candidate.score.map_or("-".to_string(), |s| format!("{s:.0}"));
-    let verdict = candidate.verdict.as_deref().unwrap_or("-");
-    let status = candidate.status.as_str();
-    let hunt_n = if candidate.hunt_count > 1 { format!(" (×{})", candidate.hunt_count) } else { String::new() };
-    format!(
-        "🔍 {ticker}\n\
-         이름: {}\n\
-         섹터: {}\n\
-         상태: {status}\n\
-         포획 점수: {hunt_s}{hunt_n}\n\
-         가죽 품질: {score}\n\
-         판결: {verdict}\n\
-         사유: {}\n\
-         등록: {}",
-        candidate.name, candidate.sector, candidate.reason, candidate.created_at,
-    )
+    // candidates 먼저, 없으면 pending 조회
+    if let Ok(Some(c)) = wdb::get_candidate_by_ticker(ticker) {
+        let hunt_s = c.hunt_score.map_or("-".to_string(), |s| format!("{s:.0}"));
+        let score = c.score.map_or("-".to_string(), |s| format!("{s:.0}"));
+        let verdict = c.verdict.as_deref().unwrap_or("-");
+        let status = c.status.as_str();
+        let hunt_n = if c.hunt_count > 1 { format!(" (×{})", c.hunt_count) } else { String::new() };
+        return format!(
+            "🔍 {ticker}\n\
+             이름: {}\n\
+             섹터: {}\n\
+             상태: {status}\n\
+             포획 점수: {hunt_s}{hunt_n}\n\
+             가죽 품질: {score}\n\
+             판결: {verdict}\n\
+             사유: {}\n\
+             등록: {}",
+            c.name, c.sector, c.reason, c.created_at,
+        );
+    }
+    if let Ok(Some(p)) = wdb::get_pending_by_ticker(ticker) {
+        let hunt_s = p.hunt_score.map_or("-".to_string(), |s| format!("{s:.0}"));
+        let hunt_n = if p.hunt_count > 1 { format!(" (×{})", p.hunt_count) } else { String::new() };
+        return format!(
+            "🔍 {ticker}\n\
+             이름: {}\n\
+             섹터: {}\n\
+             상태: pending\n\
+             포획 점수: {hunt_s}{hunt_n}\n\
+             사유: {}\n\
+             등록: {}",
+            p.name, p.sector, p.reason, p.created_at,
+        );
+    }
+    format!("{ticker} 을(를) 찾을 수 없습니다.")
 }
 
 fn cmd_watch_blacklist(args: &str) -> String {
@@ -1492,13 +1504,14 @@ fn cmd_watch_blacklist(args: &str) -> String {
             };
             let reason = parts.get(2..).map(|p| p.join(" ")).unwrap_or_default();
             let reason = if reason.is_empty() { "수동 척살".to_string() } else { reason };
+            // 영구 BL: add_blacklist + score NULL
             match wdb::add_blacklist(&ticker, &reason) {
                 Ok(_) => {
-                    // candidates status → BL + score NULL (영구: revive 대상 제외)
                     if let Ok(Some(c)) = wdb::get_candidate_by_ticker(&ticker) {
-                        let _ = wdb::update_candidate_status(c.id, crate::watchlist::models::CandidateStatus::Blacklisted);
                         let _ = wdb::clear_candidate_score(c.id);
                     }
+                    // pending에 있으면 삭제
+                    let _ = wdb::delete_pending(&ticker);
                     format!("✅ {ticker} 독도마뱀 판정 (영구)")
                 }
                 Err(e) => format!("실패: {e:#}"),
@@ -1529,7 +1542,8 @@ fn cmd_watch_blacklist(args: &str) -> String {
             let mut msg = format!("☠️ 독도마뱀 ({total}마리)\n\n최근 {show}마리:");
             for b in list.iter().take(show) {
                 let reason = truncate_chars(&b.reason, 30);
-                msg.push_str(&format!("\n{} — {}", b.ticker, reason));
+                let score = b.score.map_or("영구".to_string(), |s| format!("{s:.0}점"));
+                msg.push_str(&format!("\n{} ({score}) — {reason}", b.ticker));
             }
             msg.push_str("\n\n/w bl add [TICKER] [사유]\n/w bl rm [TICKER]");
             msg

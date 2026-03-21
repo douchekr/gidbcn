@@ -95,15 +95,19 @@ async fn fetch_detail(api: &ApiHandle, ticker: &str, market_hint: Option<&str>) 
 
 /// 수집 성공 후보 (감정 대상)
 struct ReadyCandidate {
+    /// candidates 테이블의 id (pending 졸업 후 또는 기존 judged의 id)
     id: i64,
     ticker: String,
     detail_text: String,
 }
 
-/// 사냥 사이클: Gemini 추천 → DB insert (수집/감정 안 함)
+/// 사냥 사이클: Gemini 추천 → pending insert (수집/감정 안 함)
 pub async fn run_hunt(
     http_client: &reqwest::Client,
 ) -> Result<HuntReport> {
+    // candidates에 졸업한 pending 정리
+    let _ = db::cleanup_pending_graduated();
+
     // 오래된 데이터 정리
     let retention = crate::storage::with_config(|c| c.watchlist.retention_days);
     let _ = db::cleanup_old_data(retention);
@@ -137,13 +141,13 @@ pub async fn run_evaluate(
     let revived = db::revive_near_misses(min_score).unwrap_or(0);
     report.revived = revived;
 
-    // 2. 수집 대상: pending + judged
-    let pending = db::list_candidates(Some(CandidateStatus::Pending))
+    // 2. 수집 대상: pending 테이블 + candidates(judged)
+    let pending_entries = db::list_pending()
         .context("pending 조회 실패")?;
     let judged = db::list_candidates(Some(CandidateStatus::Judged))
         .context("judged 조회 실패")?;
 
-    report.target = pending.len() + judged.len();
+    report.target = pending_entries.len() + judged.len();
 
     if report.target == 0 {
         return Ok(report);
@@ -152,23 +156,37 @@ pub async fn run_evaluate(
     // 3. KIS API 수집 → ready Vec (메모리)
     let mut ready: Vec<ReadyCandidate> = Vec::new();
 
-    for candidate in &pending {
-        let hint = if candidate.market.is_empty() { None } else { Some(candidate.market.as_str()) };
-        match fetch_detail(api, &candidate.ticker, hint).await {
+    // pending → 수집 → 졸업 (candidates에 upsert)
+    for p in &pending_entries {
+        // BL 종목 스킵 (부활 직후 다시 BL된 케이스 등)
+        if db::is_blacklisted(&p.ticker).unwrap_or(false) {
+            let _ = db::delete_pending(&p.ticker);
+            continue;
+        }
+        let hint = if p.market.is_empty() { None } else { Some(p.market.as_str()) };
+        match fetch_detail(api, &p.ticker, hint).await {
             Ok(detail) => {
-                let text = format_detail_for_gemini(&candidate.ticker, &detail);
-                let _ = db::update_detail_text(candidate.id, &text);
-                ready.push(ReadyCandidate {
-                    id: candidate.id,
-                    ticker: candidate.ticker.clone(),
-                    detail_text: text,
-                });
-                report.collected += 1;
+                let text = format_detail_for_gemini(&p.ticker, &detail);
+                // pending → candidates 졸업 (score=0, 감정 전)
+                match db::upsert_candidate(
+                    &p.ticker, &p.market, &p.name, &p.sector, &p.reason,
+                    p.hunt_score.unwrap_or(0.0), p.hunt_count, 0.0, "", &text,
+                ) {
+                    Ok(cid) => {
+                        let _ = db::delete_pending(&p.ticker);
+                        ready.push(ReadyCandidate { id: cid, ticker: p.ticker.clone(), detail_text: text });
+                        report.collected += 1;
+                    }
+                    Err(e) => {
+                        tracing::error!("졸업 실패: {}: {e:#}", p.ticker);
+                        report.collect_failed += 1;
+                    }
+                }
             }
             Err(e) => {
-                tracing::warn!("수집 실패 → BL: {}: {e:#}", candidate.ticker);
-                let _ = db::add_blacklist(&candidate.ticker, "한투 API 조회 실패 (자동)");
-                let _ = db::update_candidate_status(candidate.id, CandidateStatus::Blacklisted);
+                tracing::warn!("수집 실패 → BL: {}: {e:#}", p.ticker);
+                let _ = db::add_blacklist(&p.ticker, "한투 API 조회 실패 (자동)");
+                let _ = db::delete_pending(&p.ticker);
                 report.collect_failed += 1;
             }
         }
