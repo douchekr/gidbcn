@@ -86,8 +86,8 @@ loop {
     tokio::select! {
         _ = signal_tick.tick()        => { /* 장중이면 시그널 체크 */ }
         _ = hunt_tick.tick()          => { /* 사냥 사이클 */ }
-        _ = discovery_trigger.notified() => { /* /w run 즉시 실행 */ }
-        _ = reeval_tick.tick()        => { /* KST 02:00이면 재평가 */ }
+        _ = discovery_trigger.notified() => { /* /w hunt 즉시 실행 */ }
+        _ = eval_tick.tick()          => { /* KST 02:00/14:00 가죽 작업 */ }
     }
 }
 ```
