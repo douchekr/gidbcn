@@ -162,29 +162,33 @@ CART/BOND: `Market::is_open_now()` = false → 시그널 엔진에서 개별 스
 Google AI Studio (Flash Lite + Gemma) + 한투 API 조합.
 프롬프트 미설정 시 동작 불가 (hunt/judge 각각 필수).
 
-### 두 개의 독립 사이클
+### 두 개의 독립 사이클 + 2테이블
 
-| 사이클 | 함수 | 주기 | 역할 |
-|--------|------|------|------|
-| 사냥 | `run_hunt` | 30분 (설정 가능) | Gemini 추천 → pending 삽입 |
-| 감정 | `run_evaluate` | 하루 2회 (KST 02:00, 14:00) | 수집 + 감정 + 도태 |
+| 사이클 | 함수 | 주기 | 역할 | 소유 테이블 |
+|--------|------|------|------|------------|
+| 사냥 | `run_hunt` | 30분 | Gemini 추천 → pending 삽입 | `pending` CRUD |
+| 가죽 작업 | `run_evaluate` | 하루 2회 (KST 02:00, 14:00) | 수집 + 감정 + 도태 | `candidates` CRUD, `pending` READ |
 
-사냥 실패해도 감정은 독립 실행. 감정이 오래 걸려도 사냥에 영향 없음.
+```
+pending (사냥 버퍼)              candidates (감정 완료)
+  ticker UNIQUE                    ticker UNIQUE
+  hunt_score, hunt_count           score, verdict, detail_text
+  market, name, sector, reason     status: judged | blacklisted
+                                   strike_count
+```
 
 ### 파이프라인과 상태 전이
 
-상태 3개: `pending`, `judged`, `blacklisted`
-
 ```
 사냥 사이클:
-  Gemini 추천 → pending (hunt_count +1)
+  cleanup(졸업한 pending 삭제) → Gemini 추천 → pending (hunt_count +1)
 
-감정 사이클:
-  ① 부활: BL → pending            (score ≥ min×0.9, strike < 3)
-  ② 수집: pending/judged → 한투 API
-     pending 실패 → BL (영구)      judged 실패 → 스킵
-  ③ 감정: score < min → BL        score ≥ min → judged
-  ④ 도태: 상위 N 외 → BL          (effective score 기준)
+가죽 작업:
+  ① 부활: candidates(BL) → pending  (score ≥ min×0.9, strike < 3)
+  ② 수집: pending → KIS API → candidates 졸업 (count 합산)
+     pending 실패 → candidates(BL, 영구)    judged 실패 → 스킵
+  ③ 감정: score < min → BL                  score ≥ min → judged
+  ④ 도태: 상위 N 외 → BL                    (effective score 기준)
 ```
 
 ### 점수와 보너스/감점
