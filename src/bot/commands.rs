@@ -39,7 +39,7 @@ pub enum Command {
     Ping,
     #[command(description = "사용자 관리 (오너 전용): /user add|rm|ls")]
     User(String),
-    #[command(description = "워치리스트: /watch run|ls|pending|info|bl|budget|prompt|history")]
+    #[command(description = "워치리스트: /w hunt|ls|info|bl|budget|prompt|hist|clear")]
     Watch(String),
     #[command(description = "워치리스트 단축 (/w)")]
     W(String),
@@ -1297,7 +1297,7 @@ async fn cmd_watchlist(
     let rest = parts.get(1..).unwrap_or(&[]).join(" ");
 
     match sub {
-        "run" => {
+        "hunt" => {
             // 프롬프트 설정 확인
             let hunt = wdb::get_prompt(PromptType::Hunt).ok().flatten();
             let judge = wdb::get_prompt(PromptType::Judge).ok().flatten();
@@ -1332,8 +1332,7 @@ async fn cmd_watchlist(
             discovery_enabled.store(false, Ordering::SeqCst);
             "⏹ 은신처 복귀. 오늘은 여기까지다.".to_string()
         }
-        "list" | "ls" => cmd_watch_list(),
-        "pending" | "pd" => cmd_watch_pending(),
+        "list" | "ls" => cmd_watch_ls(&rest),
         "info" | "i" => cmd_watch_info(&rest.to_uppercase()),
         "export" | "ex" => cmd_watch_export(),
         "blacklist" | "bl" => cmd_watch_blacklist(&rest),
@@ -1342,10 +1341,10 @@ async fn cmd_watchlist(
         "history" | "hist" => cmd_watch_history(),
         "clear" => cmd_watch_clear(&rest),
         _ => "📋 워치리스트 명령어\n\n\
-              /w run — 사냥 출발\n\
+              /w hunt — 사냥 출발\n\
               /w stop — 은신처 복귀\n\
-              /w ls — 가죽 확보 현황\n\
-              /w pending — 포획 성공 현황\n\
+              /w ls — 포획 게코 (기본)\n\
+              /w ls pelt — 가죽 현황\n\
               /w export — CSV 내보내기\n\
               /w info [TICKER] — 종목 상세\n\
               /w bl — 독도마뱀\n\
@@ -1355,13 +1354,52 @@ async fn cmd_watchlist(
               /w prompt hunt show|set\n\
               /w prompt judge show|set\n\
               /w hist — 최근 호출 이력\n\
-              /w clear judged|bl — 일괄 삭제"
+              /w clear gecko|pelt|bl — 일괄 삭제"
             .to_string(),
     }
 }
 
 
-fn cmd_watch_list() -> String {
+fn cmd_watch_ls(args: &str) -> String {
+    match args.trim() {
+        "pelt" => cmd_watch_ls_pelt(),
+        _ => cmd_watch_ls_gecko(),
+    }
+}
+
+fn cmd_watch_ls_gecko() -> String {
+    let mut entries = match wdb::list_pending() {
+        Ok(c) => c,
+        Err(e) => return format!("조회 실패: {e:#}"),
+    };
+    if entries.is_empty() {
+        return "포획된 게코가 없다. /w hunt 로 사냥을 시작하라.".to_string();
+    }
+    entries.sort_by(|a, b| {
+        let sa = a.hunt_score.unwrap_or(0.0);
+        let sb = b.hunt_score.unwrap_or(0.0);
+        sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+            .then(b.hunt_count.cmp(&a.hunt_count))
+    });
+    let total = entries.len();
+    let mut msg = if total > 30 {
+        format!("🔍 포획 게코 ({total}마리) — 상위 30마리\n")
+    } else {
+        format!("🔍 포획 게코 ({total}마리)\n")
+    };
+    for (i, c) in entries.iter().enumerate().take(30) {
+        let score = c.hunt_score.map_or("-".to_string(), |s| format!("{s:.0}"));
+        let hunt_n = if c.hunt_count > 1 { format!(" ×{}", c.hunt_count) } else { String::new() };
+        let reason_short = truncate_chars(&c.reason, 40);
+        msg.push_str(&format!(
+            "\n{}. {} [{}점{hunt_n}] {}\n   {reason_short}",
+            i + 1, c.ticker, score, c.sector,
+        ));
+    }
+    msg
+}
+
+fn cmd_watch_ls_pelt() -> String {
     use crate::watchlist::models::CandidateStatus;
     let candidates = match wdb::list_candidates(Some(CandidateStatus::Judged)) {
         Ok(c) => c,
@@ -1372,7 +1410,7 @@ fn cmd_watch_list() -> String {
         if in_progress > 0 {
             return "게코를 포획했지만 아직 가죽을 벗기지 못했다.".to_string();
         }
-        return "포획된 게코가 없다. /w run 으로 사냥을 시작하라.".to_string();
+        return "가죽이 없다. /w hunt 로 사냥을 시작하라.".to_string();
     }
     let total = candidates.len();
     let mut msg = if total > 30 {
@@ -1389,39 +1427,6 @@ fn cmd_watch_list() -> String {
         msg.push_str(&format!(
             "\n{bob}{}. {} ({}{hunt_n}) [{score}점]\n   {reason_short}",
             i + 1, c.ticker, c.sector,
-        ));
-    }
-    msg
-}
-
-fn cmd_watch_pending() -> String {
-    let mut entries = match wdb::list_pending() {
-        Ok(c) => c,
-        Err(e) => return format!("조회 실패: {e:#}"),
-    };
-    if entries.is_empty() {
-        return "포획 성공 중인 게코가 없다.".to_string();
-    }
-    // hunt_score 내림차순, 같으면 hunt_count 내림차순
-    entries.sort_by(|a, b| {
-        let sa = a.hunt_score.unwrap_or(0.0);
-        let sb = b.hunt_score.unwrap_or(0.0);
-        sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
-            .then(b.hunt_count.cmp(&a.hunt_count))
-    });
-    let total = entries.len();
-    let mut msg = if total > 30 {
-        format!("🔍 포획 성공 ({total}마리) — 상위 30마리\n")
-    } else {
-        format!("🔍 포획 성공 ({total}마리)\n")
-    };
-    for (i, c) in entries.iter().enumerate().take(30) {
-        let score = c.hunt_score.map_or("-".to_string(), |s| format!("{s:.0}"));
-        let hunt_n = if c.hunt_count > 1 { format!(" ×{}", c.hunt_count) } else { String::new() };
-        let reason_short = truncate_chars(&c.reason, 40);
-        msg.push_str(&format!(
-            "\n{}. {} [{}점{hunt_n}] {}\n   {reason_short}",
-            i + 1, c.ticker, score, c.sector,
         ));
     }
     msg
@@ -1607,9 +1612,15 @@ fn cmd_watch_prompt(args: &str) -> String {
 fn cmd_watch_clear(args: &str) -> String {
     use crate::watchlist::models::CandidateStatus;
     match args.trim() {
-        "judged" => {
+        "gecko" => {
+            match wdb::clear_all_pending() {
+                Ok(n) => format!("🗑 포획 게코 {n}마리 방생"),
+                Err(e) => format!("삭제 실패: {e:#}"),
+            }
+        }
+        "pelt" => {
             match wdb::clear_candidates_by_status(CandidateStatus::Judged) {
-                Ok(n) => format!("🗑 judged {n}건 삭제"),
+                Ok(n) => format!("🗑 가죽 {n}장 폐기"),
                 Err(e) => format!("삭제 실패: {e:#}"),
             }
         }
@@ -1619,7 +1630,7 @@ fn cmd_watch_clear(args: &str) -> String {
                 Err(e) => format!("삭제 실패: {e:#}"),
             }
         }
-        _ => "사용법: /w clear judged|bl".to_string(),
+        _ => "사용법: /w clear gecko|pelt|bl".to_string(),
     }
 }
 

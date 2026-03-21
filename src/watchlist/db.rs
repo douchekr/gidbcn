@@ -214,6 +214,13 @@ pub fn delete_pending(ticker: &str) -> Result<bool> {
     })
 }
 
+pub fn clear_all_pending() -> Result<usize> {
+    with_db(|conn| {
+        let n = conn.execute("DELETE FROM pending", [])?;
+        Ok(n)
+    })
+}
+
 /// pending 항목을 ticker로 조회
 pub fn get_pending_by_ticker(ticker: &str) -> Result<Option<PendingEntry>> {
     with_db(|conn| {
