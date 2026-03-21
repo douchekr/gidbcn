@@ -360,6 +360,7 @@ pub fn get_candidate_by_ticker(ticker: &str) -> Result<Option<Candidate>> {
     })
 }
 
+#[allow(dead_code)]
 pub fn count_candidates_by_status(status: CandidateStatus) -> Result<usize> {
     with_db(|conn| {
         let count: i64 = conn.query_row(

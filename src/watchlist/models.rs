@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// 포획 대기 종목 (pending 테이블)
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct PendingEntry {
     pub id: i64,
     pub ticker: String,
