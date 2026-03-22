@@ -1332,7 +1332,7 @@ async fn cmd_watchlist(
             discovery_enabled.store(false, Ordering::SeqCst);
             "⏹ 은신처 복귀. 오늘은 여기까지다.".to_string()
         }
-        "list" | "ls" => cmd_watch_ls(&rest),
+        "list" | "ls" => cmd_watch_ls(&rest, discovery_enabled.load(Ordering::SeqCst)),
         "info" | "i" => cmd_watch_info(&rest.to_uppercase()),
         "export" | "ex" => cmd_watch_export(),
         "blacklist" | "bl" => cmd_watch_blacklist(&rest),
@@ -1360,20 +1360,24 @@ async fn cmd_watchlist(
 }
 
 
-fn cmd_watch_ls(args: &str) -> String {
+fn cmd_watch_ls(args: &str, hunting: bool) -> String {
     match args.trim() {
-        "pelt" => cmd_watch_ls_pelt(),
-        _ => cmd_watch_ls_gecko(),
+        "pelt" => cmd_watch_ls_pelt(hunting),
+        _ => cmd_watch_ls_gecko(hunting),
     }
 }
 
-fn cmd_watch_ls_gecko() -> String {
+fn cmd_watch_ls_gecko(hunting: bool) -> String {
     let mut entries = match wdb::list_pending() {
         Ok(c) => c,
         Err(e) => return format!("조회 실패: {e:#}"),
     };
     if entries.is_empty() {
-        return "포획된 게코가 없다. /w hunt 로 사냥을 시작하라.".to_string();
+        return if hunting {
+            "사냥 중이지만 아직 포획된 게코가 없다.".to_string()
+        } else {
+            "포획된 게코가 없다. /w hunt 로 사냥을 시작하라.".to_string()
+        };
     }
     entries.sort_by(|a, b| {
         let sa = a.hunt_score.unwrap_or(0.0);
@@ -1399,24 +1403,27 @@ fn cmd_watch_ls_gecko() -> String {
     msg
 }
 
-fn cmd_watch_ls_pelt() -> String {
+fn cmd_watch_ls_pelt(hunting: bool) -> String {
     use crate::watchlist::models::CandidateStatus;
     let candidates = match wdb::list_candidates(Some(CandidateStatus::Judged)) {
         Ok(c) => c,
         Err(e) => return format!("조회 실패: {e:#}"),
     };
     if candidates.is_empty() {
-        let in_progress = wdb::count_pending().unwrap_or(0);
-        if in_progress > 0 {
-            return "게코를 포획했지만 아직 가죽을 벗기지 못했다.".to_string();
-        }
-        return "가죽이 없다. /w hunt 로 사냥을 시작하라.".to_string();
+        let pending = wdb::count_pending().unwrap_or(0);
+        return if pending > 0 {
+            format!("게코를 {pending}마리 잡았지만 아직 가죽을 벗기지 못했다.")
+        } else if hunting {
+            "사냥 중이지만 아직 포획된 게코가 없다.".to_string()
+        } else {
+            "포획된 게코가 없다. /w hunt 로 사냥을 시작하라.".to_string()
+        };
     }
     let total = candidates.len();
     let mut msg = if total > 30 {
-        format!("🦎 가죽 확보 ({total}마리) — 품질 상위 30마리\n")
+        format!("🦎 가죽 확보 ({total}마리) — 품질 상위 30마리\n🔄 다음 가죽 작업: 02:00 / 14:00 KST\n")
     } else {
-        format!("🦎 가죽 확보 ({total}마리)\n")
+        format!("🦎 가죽 확보 ({total}마리)\n🔄 다음 가죽 작업: 02:00 / 14:00 KST\n")
     };
     let bob_count = 7;
     for (i, c) in candidates.iter().enumerate().take(30) {
