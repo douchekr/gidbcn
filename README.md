@@ -148,17 +148,28 @@ CREATE TABLE signals (
 );
 ```
 
-### candidates (워치리스트)
+### pending (사냥 버퍼)
+```sql
+CREATE TABLE pending (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL UNIQUE, market TEXT, name TEXT,
+    sector TEXT, reason TEXT, hunt_score REAL,
+    hunt_count INTEGER NOT NULL DEFAULT 1,
+    prompt_id INTEGER, created_at TEXT NOT NULL
+);
+```
+
+### candidates (감정 완료)
 ```sql
 CREATE TABLE candidates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ticker TEXT NOT NULL UNIQUE, market TEXT, name TEXT,
     sector TEXT, reason TEXT, hunt_score REAL,
-    score REAL, verdict TEXT,
-    status TEXT NOT NULL DEFAULT 'pending',  -- pending/judged/blacklisted
-    prompt_id INTEGER, created_at TEXT NOT NULL,
-    judged_at TEXT, detail_text TEXT DEFAULT '',
-    hunt_count INTEGER NOT NULL DEFAULT 1
+    hunt_count INTEGER NOT NULL DEFAULT 1,
+    score REAL, verdict TEXT, detail_text TEXT DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'judged',  -- judged/blacklisted
+    strike_count INTEGER NOT NULL DEFAULT 0,
+    judged_at TEXT, created_at TEXT NOT NULL
 );
 ```
 
@@ -217,16 +228,16 @@ CREATE TABLE candidates (
 ### /w (워치리스트)
 | 명령어 | 설명 |
 |---|---|
-| `/w run` | 사냥 시작 (즉시 1회 + 자동 주기) |
+| `/w hunt` | 사냥 시작 (즉시 1회 + 자동 주기) |
 | `/w stop` | 사냥 중지 |
-| `/w ls` | 가죽 목록 (점수순) |
-| `/w pending` | 포획 성공 현황 (hunt_score순) |
+| `/w ls` | 포획 게코 (기본) |
+| `/w ls pelt` | 가죽 현황 (점수순) |
 | `/w info [TICKER]` | 종목 상세 |
 | `/w bl` / `/w bl add` / `/w bl rm` | 블랙리스트 관리 (수동 BL = 영구) |
 | `/w budget` | API 사용량 |
 | `/w prompt hunt\|judge show\|set` | 프롬프트 관리 |
 | `/w hist` | Gemini 호출 이력 |
-| `/w clear judged\|bl` | 상태별 일괄 삭제 |
+| `/w clear gecko\|pelt\|bl` | 일괄 삭제 |
 
 ### /user (오너 전용)
 | 명령어 | 설명 |
