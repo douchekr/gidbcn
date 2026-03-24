@@ -1553,9 +1553,10 @@ fn cmd_watch_blacklist(args: &str) -> String {
             let show = 10;
             let mut msg = format!("☠️ 독도마뱀 ({total}마리)\n\n최근 {show}마리:");
             for b in list.iter().take(show) {
-                let reason = truncate_chars(&b.reason, 30);
+                let bl_reason = b.verdict.as_deref().unwrap_or(&b.reason);
+                let bl_reason = truncate_chars(bl_reason, 30);
                 let score = b.score.map_or("영구".to_string(), |s| format!("{s:.0}점"));
-                msg.push_str(&format!("\n{} ({score}) — {reason}", b.ticker));
+                msg.push_str(&format!("\n{} ({score}) — {bl_reason}", b.ticker));
             }
             msg.push_str("\n\n/w bl add [TICKER] [사유]\n/w bl rm [TICKER]");
             msg

@@ -430,10 +430,10 @@ pub fn add_blacklist(ticker: &str, reason: &str) -> Result<()> {
     with_db(|conn| {
         let now = now_iso();
         conn.execute(
-            "INSERT INTO candidates (ticker, reason, status, strike_count, created_at)
+            "INSERT INTO candidates (ticker, verdict, status, strike_count, created_at)
              VALUES (?1, ?2, 'blacklisted', 1, ?3)
              ON CONFLICT(ticker) DO UPDATE SET
-               reason = excluded.reason,
+               verdict = excluded.verdict,
                strike_count = candidates.strike_count + 1,
                status = 'blacklisted'",
             params![ticker, reason, now],
@@ -1118,7 +1118,7 @@ mod tests {
 
         let c = get_candidate_by_ticker("SCAM").unwrap().unwrap();
         assert_eq!(c.strike_count, 3);
-        assert_eq!(c.reason, "third");
+        assert_eq!(c.verdict.as_deref(), Some("third"));
     }
 
     #[test]
