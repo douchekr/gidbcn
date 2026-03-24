@@ -1,7 +1,6 @@
 /target
 .vscode/
 .claude/
-.contexts
 CLAUDE.md
 .cargo/
 *.code-workspace
