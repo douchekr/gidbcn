@@ -504,14 +504,14 @@ pub fn cull_excess_judged(max_survivors: usize, hunt_count_weight: f64) -> Resul
             .collect();
 
         for (id, _ticker, score) in &victims {
-            let reason = format!(
+            let bl_reason = format!(
                 "\u{1f5e1}\u{fe0f} 척살: {:.0}점 (상위 {max_survivors}위 밖)",
                 score
             );
             conn.execute(
-                "UPDATE candidates SET status = 'blacklisted', strike_count = strike_count + 1, reason = ?1
+                "UPDATE candidates SET status = 'blacklisted', strike_count = strike_count + 1, verdict = ?1
                  WHERE id = ?2",
-                params![reason, id],
+                params![bl_reason, id],
             )?;
         }
 
