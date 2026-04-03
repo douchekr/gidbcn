@@ -558,6 +558,7 @@ async fn cmd_list(user_id: i64, args: &str, api: &ApiHandle) -> String {
         return format!("@{account_filter} 계좌에 종목이 없습니다.");
     }
 
+    let t0 = std::time::Instant::now();
     let now = kst_now().format("%Y-%m-%d %H:%M").to_string();
     let acct_label = if account_filter.is_empty() { String::new() } else { format!(" [@{}]", account_filter) };
     let mut msg = format!("📊 포트폴리오 현황{acct_label}\n{now} 기준\n");
@@ -715,6 +716,7 @@ async fn cmd_list(user_id: i64, args: &str, api: &ApiHandle) -> String {
         ));
     }
 
+    tracing::info!("/port list 완료: {}종목, {:.1}초", indices.len(), t0.elapsed().as_secs_f64());
     msg
 }
 
