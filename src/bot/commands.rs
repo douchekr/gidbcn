@@ -116,6 +116,7 @@ pub async fn handle_command(
                 let fname = chrono::Local::now().format("portfolio_%Y%m%d_%H%M.csv").to_string();
                 let file = InputFile::memory(csv.into_bytes()).file_name(fname);
                 bot.send_document(chat_id, file).await?;
+                bot.send_message(chat_id, "📥 Google Sheet에서 '파일 → 가져오기'로 CSV를 import해서 사용하세요.").await?;
             } else {
                 // 에러 메시지 → 텍스트 전송
                 bot.send_message(chat_id, csv).await?;

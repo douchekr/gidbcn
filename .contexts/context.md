@@ -23,7 +23,7 @@
 
 ## 다음 목표
 
-- 운영 데이터 확인
+(취소됨)
 
 ## 핵심 메모
 - 런타임: tokio current_thread + LocalSet, Actor 패턴 (mpsc/oneshot), 뮤텍스 프리
