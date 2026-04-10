@@ -67,13 +67,21 @@ pub enum ApiRequest {
 `mpsc::Sender` 래퍼. Clone 가능 → 여러 태스크에서 공유.
 호출 측은 채널을 모름. `api.get_domestic_price("005930").await?` 만 호출.
 
-### API Actor 내부
-`ActorContext`가 reqwest::Client, 토큰, rate limiter 독점 소유.
-매 요청 전 `token_needs_refresh()` 체크 → 만료 1시간 전 자동 갱신.
-해외주식 조회 시 `t_rate` → `usd_krw` 메모리 갱신.
+### API Actor 내부 (파이프라인)
+`ActorContext`가 토큰, rate limiter 독점 소유. `reqwest::Client`는 Clone(커넥션 풀 공유).
+`FuturesUnordered` + `tokio::select!`로 발신은 rate limit(50ms) 직렬, 응답은 비동기 수거.
 
-### current_thread에서의 동작
-싱글스레드, `.await`에서 cooperative 전환. Mutex 없이 채널로 동시성 확보.
+```
+발신: [req1][50ms][req2][50ms][req3]...  → rate limit 준수
+응답:      [────resp1────]                → 완료 순서대로 수거
+                [────resp2────]
+```
+
+API 함수는 `(client, base_url, headers)` 받아서 독립 실행. Actor 상태 빌림 없음.
+해외주식 응답 시 `t_rate` → `usd_krw` completion 핸들러에서 갱신.
+
+### /port list 캐시
+`cached_price` + `cached_at` age ≤ 1분이면 API 미호출. 장중 반복 조회 시 즉시 응답.
 
 ---
 
