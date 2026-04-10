@@ -1,20 +1,19 @@
 use anyhow::{Context, Result};
+use reqwest::header::HeaderMap;
 
-use super::actor::ActorContext;
+use super::actor::send_with_retry;
 
 /// 상품기본조회 (CTPF1604R) — 종목명(prdt_abrv_name) 조회
 /// PRDT_TYPE_CD: 300=KRX, 512=NAS, 513=NYS, 529=AMS, 302=BOND
-pub async fn get_stock_name(ctx: &ActorContext, prdt_type_cd: &str, pdno: &str) -> Result<String> {
+pub async fn get_stock_name(client: &reqwest::Client, base_url: &str, headers: HeaderMap, prdt_type_cd: &str, pdno: &str) -> Result<String> {
     let url = format!(
-        "{}/uapi/domestic-stock/v1/quotations/search-info",
-        ctx.config.base_url
+        "{base_url}/uapi/domestic-stock/v1/quotations/search-info",
     );
 
-    let http_resp = ctx
-        .send_with_retry(
-            ctx.client
+    let http_resp = send_with_retry(
+            client
                 .get(&url)
-                .headers(ctx.common_headers("CTPF1604R")?)
+                .headers(headers)
                 .query(&[("PRDT_TYPE_CD", prdt_type_cd), ("PDNO", pdno)]),
         )
         .await

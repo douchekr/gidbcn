@@ -1,23 +1,19 @@
 use anyhow::{Context, Result};
+use reqwest::header::HeaderMap;
 
 use crate::models::messages::PriceData;
 
-use super::actor::ActorContext;
+use super::actor::send_with_retry;
 
-pub async fn get_price(ctx: &ActorContext, symbol: &str) -> Result<PriceData> {
-    // inquire-daily-itemchartprice(FHKST03010100)는 장마감 후 이상동작 확인 → 미사용.
-    // inquire-price(FHKST01010100): 날짜 파라미터 불필요, 장 내외 모두 안정적으로 동작.
-    // 종목명(hts_kor_isnm) 미포함 → Holding.name 캐시 사용.
+pub async fn get_price(client: &reqwest::Client, base_url: &str, headers: HeaderMap, symbol: &str) -> Result<PriceData> {
     let url = format!(
-        "{}/uapi/domestic-stock/v1/quotations/inquire-price",
-        ctx.config.base_url
+        "{base_url}/uapi/domestic-stock/v1/quotations/inquire-price",
     );
 
-    let http_resp = ctx
-        .send_with_retry(
-            ctx.client
+    let http_resp = send_with_retry(
+            client
                 .get(&url)
-                .headers(ctx.common_headers("FHKST01010100")?)
+                .headers(headers)
                 .query(&[("FID_COND_MRKT_DIV_CODE", "J"), ("FID_INPUT_ISCD", symbol)]),
         )
         .await
@@ -85,7 +81,6 @@ mod tests {
 
     #[test]
     fn parse_error_response() {
-        // API 에러 시에도 output이 있을 수 있음
         let body = r#"{
             "output": null,
             "rt_cd": "1",

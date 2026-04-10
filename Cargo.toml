@@ -21,3 +21,4 @@ pbkdf2 = { version = "0.12", features = ["hmac"] }
 sha2 = "0.10"
 rand = "0.8"
 base64 = "0.22"
+futures = "0.3.32"

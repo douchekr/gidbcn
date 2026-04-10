@@ -1,20 +1,19 @@
 use anyhow::{Context, Result};
+use reqwest::header::HeaderMap;
 
 use crate::models::messages::BondData;
 
-use super::actor::ActorContext;
+use super::actor::send_with_retry;
 
-pub async fn get_price(ctx: &ActorContext, isin: &str) -> Result<BondData> {
+pub async fn get_price(client: &reqwest::Client, base_url: &str, headers: HeaderMap, isin: &str) -> Result<BondData> {
     let url = format!(
-        "{}/uapi/domestic-bond/v1/quotations/inquire-price",
-        ctx.config.base_url
+        "{base_url}/uapi/domestic-bond/v1/quotations/inquire-price",
     );
 
-    let http_resp = ctx
-        .send_with_retry(
-            ctx.client
+    let http_resp = send_with_retry(
+            client
                 .get(&url)
-                .headers(ctx.common_headers("FHKBJ773400C0")?)
+                .headers(headers)
                 .query(&[("FID_COND_MRKT_DIV_CODE", "B"), ("FID_INPUT_ISCD", isin)]),
         )
         .await

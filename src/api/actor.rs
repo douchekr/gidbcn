@@ -1,4 +1,9 @@
+use std::future::Future;
+use std::pin::Pin;
+
 use anyhow::Result;
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 use reqwest::header::{HeaderMap, HeaderValue};
 use tokio::sync::{mpsc, oneshot};
 
@@ -45,26 +50,6 @@ impl ActorContext {
         self.last_request = std::time::Instant::now();
     }
 
-    /// keep-alive 연결이 서버 측에서 종료된 경우 1회 재시도.
-    /// 타임아웃은 재시도하지 않음.
-    pub async fn send_with_retry(
-        &self,
-        builder: reqwest::RequestBuilder,
-    ) -> reqwest::Result<reqwest::Response> {
-        let retry = builder.try_clone();
-        match builder.send().await {
-            Ok(resp) => Ok(resp),
-            Err(e) if !e.is_timeout() && (e.is_request() || e.is_connect()) => {
-                tracing::debug!("Stale connection, retrying once: {e}");
-                match retry {
-                    Some(b) => b.send().await,
-                    None => Err(e),
-                }
-            }
-            Err(e) => Err(e),
-        }
-    }
-
     /// 공통 헤더 생성
     pub fn common_headers(&self, tr_id: &str) -> Result<HeaderMap> {
         let token = self
@@ -105,59 +90,125 @@ impl ActorContext {
     }
 }
 
-/// API Actor 메인 루프
+/// keep-alive 연결이 서버 측에서 종료된 경우 1회 재시도.
+/// 타임아웃은 재시도하지 않음.
+pub async fn send_with_retry(
+    builder: reqwest::RequestBuilder,
+) -> reqwest::Result<reqwest::Response> {
+    let retry = builder.try_clone();
+    match builder.send().await {
+        Ok(resp) => Ok(resp),
+        Err(e) if !e.is_timeout() && (e.is_request() || e.is_connect()) => {
+            tracing::debug!("Stale connection, retrying once: {e}");
+            match retry {
+                Some(b) => b.send().await,
+                None => Err(e),
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// in-flight future 완료 시 환율 갱신용
+type InFlightFut = Pin<Box<dyn Future<Output = Option<f64>>>>;
+
+/// API Actor 메인 루프 (파이프라인: 발신 후 응답 비동기 수거)
 pub async fn run_api_actor(mut rx: mpsc::Receiver<ApiRequest>) {
     let kis_config = storage::with_config(|c| c.to_kis_api_config());
     let mut ctx = ActorContext::new(kis_config);
     let mut usd_krw: f64 = 1350.0;
+    let mut in_flight: FuturesUnordered<InFlightFut> = FuturesUnordered::new();
 
-    // 시작 ��� 토��� 확인
     if auth::token_needs_refresh(&ctx.config.token) {
         ctx.refresh_token().await;
     }
 
-    while let Some(req) = rx.recv().await {
-        // 토큰 갱신 체크
-        if auth::token_needs_refresh(&ctx.config.token) {
-            ctx.refresh_token().await;
-        }
+    loop {
+        tokio::select! {
+            biased;
 
-        match req {
-            ApiRequest::GetDomesticPrice { symbol, respond_to } => {
-                ctx.rate_limit().await;
-                let result = domestic::get_price(&ctx, &symbol).await;
-                let _ = respond_to.send(result);
-            }
-            ApiRequest::GetOverseasPrice {
-                exchange: exch,
-                symbol,
-                respond_to,
-            } => {
-                ctx.rate_limit().await;
-                let result = overseas::get_price(&ctx, &exch, &symbol).await;
-                // t_rate(당일환율) 부산물로 메모리 갱신
-                if let Ok((_, Some(rate))) = &result {
-                    usd_krw = *rate;
+            Some(rate_update) = in_flight.next(), if !in_flight.is_empty() => {
+                if let Some(rate) = rate_update {
+                    usd_krw = rate;
                 }
-                let _ = respond_to.send(result.map(|(price, _)| price));
             }
-            ApiRequest::GetBondPrice { isin, respond_to } => {
+
+            req = rx.recv() => {
+                let Some(req) = req else { break };
+
+                if auth::token_needs_refresh(&ctx.config.token) {
+                    ctx.refresh_token().await;
+                }
+
+                if let ApiRequest::GetExchangeRate { respond_to } = req {
+                    let _ = respond_to.send(Ok(usd_krw));
+                    continue;
+                }
+
                 ctx.rate_limit().await;
-                let result = bond::get_price(&ctx, &isin).await;
-                let _ = respond_to.send(result);
-            }
-            ApiRequest::GetExchangeRate { respond_to } => {
-                let _ = respond_to.send(Ok(usd_krw));
-            }
-            ApiRequest::GetStockName { prdt_type_cd, pdno, respond_to } => {
-                ctx.rate_limit().await;
-                let result = stock_info::get_stock_name(&ctx, &prdt_type_cd, &pdno).await;
-                let _ = respond_to.send(result);
-            }
-            ApiRequest::GetOverseasDetail { exchange: exch, symbol, respond_to } => {
-                ctx.rate_limit().await;
-                let result = overseas::get_detail(&ctx, &exch, &symbol).await;
-                let _ = respond_to.send(result);
+
+                let client = ctx.client.clone();
+                let base_url = ctx.config.base_url.clone();
+
+                match req {
+                    ApiRequest::GetDomesticPrice { symbol, respond_to } => {
+                        let headers = match ctx.common_headers("FHKST01010100") {
+                            Ok(h) => h,
+                            Err(e) => { let _ = respond_to.send(Err(e)); continue; }
+                        };
+                        in_flight.push(Box::pin(async move {
+                            let result = domestic::get_price(&client, &base_url, headers, &symbol).await;
+                            let _ = respond_to.send(result);
+                            None
+                        }));
+                    }
+                    ApiRequest::GetOverseasPrice { exchange: exch, symbol, respond_to } => {
+                        let headers = match ctx.common_headers("HHDFS76200200") {
+                            Ok(h) => h,
+                            Err(e) => { let _ = respond_to.send(Err(e)); continue; }
+                        };
+                        in_flight.push(Box::pin(async move {
+                            let result = overseas::get_price(&client, &base_url, headers, &exch, &symbol).await;
+                            let rate = result.as_ref().ok().and_then(|(_, r)| *r);
+                            let _ = respond_to.send(result.map(|(price, _)| price));
+                            rate
+                        }));
+                    }
+                    ApiRequest::GetBondPrice { isin, respond_to } => {
+                        let headers = match ctx.common_headers("FHKBJ773400C0") {
+                            Ok(h) => h,
+                            Err(e) => { let _ = respond_to.send(Err(e)); continue; }
+                        };
+                        in_flight.push(Box::pin(async move {
+                            let result = bond::get_price(&client, &base_url, headers, &isin).await;
+                            let _ = respond_to.send(result);
+                            None
+                        }));
+                    }
+                    ApiRequest::GetStockName { prdt_type_cd, pdno, respond_to } => {
+                        let headers = match ctx.common_headers("CTPF1604R") {
+                            Ok(h) => h,
+                            Err(e) => { let _ = respond_to.send(Err(e)); continue; }
+                        };
+                        in_flight.push(Box::pin(async move {
+                            let result = stock_info::get_stock_name(&client, &base_url, headers, &prdt_type_cd, &pdno).await;
+                            let _ = respond_to.send(result);
+                            None
+                        }));
+                    }
+                    ApiRequest::GetOverseasDetail { exchange: exch, symbol, respond_to } => {
+                        let headers = match ctx.common_headers("HHDFS76200200") {
+                            Ok(h) => h,
+                            Err(e) => { let _ = respond_to.send(Err(e)); continue; }
+                        };
+                        in_flight.push(Box::pin(async move {
+                            let result = overseas::get_detail(&client, &base_url, headers, &exch, &symbol).await;
+                            let _ = respond_to.send(result);
+                            None
+                        }));
+                    }
+                    ApiRequest::GetExchangeRate { .. } => unreachable!(),
+                }
             }
         }
     }

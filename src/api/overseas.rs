@@ -1,22 +1,21 @@
 use anyhow::{Context, Result};
+use reqwest::header::HeaderMap;
 
 use crate::models::messages::{OverseasDetail, PriceData};
 
-use super::actor::ActorContext;
+use super::actor::send_with_retry;
 
 /// (현재가 데이터, 당일환율 t_rate) 반환.
 /// price-detail(HHDFS76200200)은 t_rate(당일환율)를 포함하므로 환율 캐싱에 활용.
-pub async fn get_price(ctx: &ActorContext, exchange: &str, symbol: &str) -> Result<(PriceData, Option<f64>)> {
+pub async fn get_price(client: &reqwest::Client, base_url: &str, headers: HeaderMap, exchange: &str, symbol: &str) -> Result<(PriceData, Option<f64>)> {
     let url = format!(
-        "{}/uapi/overseas-price/v1/quotations/price-detail",
-        ctx.config.base_url
+        "{base_url}/uapi/overseas-price/v1/quotations/price-detail",
     );
 
-    let http_resp = ctx
-        .send_with_retry(
-            ctx.client
+    let http_resp = send_with_retry(
+            client
                 .get(&url)
-                .headers(ctx.common_headers("HHDFS76200200")?)
+                .headers(headers)
                 .query(&[("AUTH", ""), ("EXCD", exchange), ("SYMB", symbol)]),
         )
         .await
@@ -43,17 +42,15 @@ pub fn parse_price_response(body: &str) -> Result<(PriceData, Option<f64>)> {
 }
 
 /// 해외주식 상세 — 동일 엔드포인트에서 전체 필드 파싱
-pub async fn get_detail(ctx: &ActorContext, exchange: &str, symbol: &str) -> Result<OverseasDetail> {
+pub async fn get_detail(client: &reqwest::Client, base_url: &str, headers: HeaderMap, exchange: &str, symbol: &str) -> Result<OverseasDetail> {
     let url = format!(
-        "{}/uapi/overseas-price/v1/quotations/price-detail",
-        ctx.config.base_url
+        "{base_url}/uapi/overseas-price/v1/quotations/price-detail",
     );
 
-    let http_resp = ctx
-        .send_with_retry(
-            ctx.client
+    let http_resp = send_with_retry(
+            client
                 .get(&url)
-                .headers(ctx.common_headers("HHDFS76200200")?)
+                .headers(headers)
                 .query(&[("AUTH", ""), ("EXCD", exchange), ("SYMB", symbol)]),
         )
         .await
@@ -95,7 +92,6 @@ fn parse_f64(s: Option<&str>) -> f64 {
 mod tests {
     use super::*;
 
-    // 한투 API 스펙 문서의 TSLA 응답 예시
     const TSLA_RESPONSE: &str = r#"{
         "output": {
             "rsym": "DNASTSLA",
