@@ -15,6 +15,8 @@
 - [2026/03/17] 파이프라인 구현 (pending + candidates 테이블)
 
 ## 다음 목표
+- [ ] [.contexts/plan-cache-strategy.md](.contexts/plan-cache-strategy.md) - `/port list` 캐시 strategy 개선
+- [ ] [.contexts/plan-request-batching.md](.contexts/plan-request-batching.md) - API 요청 배치 처리 (threshold: 100개+)
 
 ## 핵심 메모
 - **GROUP, OTHER 에게 권한 없는 파일 접근 금지**
