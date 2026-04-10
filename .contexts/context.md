@@ -4,22 +4,17 @@
 - 커밋 완료 후 context 파일 업데이트. 푸시는 요청 시에만 수행
 
 ## 현재 상태
-- [2026/04/11] /port list 캐시 전략 개선
-  - age ≤ 1분: 캐시 직접 사용, 1분~5분: API 시도 후 실패시 캐시 폴백
-  - 유닛테스트 169개 통과
+- [2026/04/11] API Actor 파이프라이닝 (FuturesUnordered) + 캐시 전략 개선
+  - /port list: 26.8초 → 2.7초 (파이프라인) → 0.0초 (캐시 히트)
+  - Actor: send_with_retry free function, API 함수 시그니처 변경 (ctx → client,headers)
+  - 캐시: age ≤ 1분 캐시 사용, 1분~5분 API 시도 후 실패시 폴백
 - [2026/04/11] port ex 명령어에 Google Sheet 가이드 문구 추가
-  - CSV 파일 전송 후 'Google Sheet에서 import' 안내 문구 추가
-  - 유닛테스트 169개 통과, OCI 배포 완료
-- [2026/03/22] /w ls 상태별 메시지 + add_blacklist reason 덮어쓰기 버그 수정 + 배포
+- [2026/03/22] /w ls 상태별 메시지 + add_blacklist reason 버그 수정
 - [2026/03/21] 사이클 분리 + 테이블 분리 + 명령어 개편(gecko/pelt)
-- [2026/03/20] hunt_count 가중치 추가
-- [2026/03/19] 워치리스트 문구 정리
-- [2026/03/18] 세계관 적용 (모하비 게코 사냥꾼)
-- [2026/03/17] 파이프라인 구현 (pending + candidates 테이블)
+- [2026/03/17~20] 파이프라인 구현, 세계관, 문구, hunt_count
 
 ## 다음 목표
-- [x] [.contexts/plan-cache-strategy.md](.contexts/plan-cache-strategy.md) - `/port list` 캐시 strategy 개선
-- [ ] [.contexts/plan-request-batching.md](.contexts/plan-request-batching.md) - API 요청 배치 처리 (threshold: 100개+)
+- 운영 데이터 확인
 
 ## 핵심 메모
 - **GROUP, OTHER 에게 권한 없는 파일 접근 금지**
