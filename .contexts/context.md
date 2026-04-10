@@ -4,6 +4,9 @@
 - 커밋 완료 후 context 파일 업데이트. 푸시는 요청 시에만 수행
 
 ## 현재 상태
+- [2026/04/11] /port list 캐시 전략 개선
+  - age ≤ 1분: 캐시 직접 사용, 1분~5분: API 시도 후 실패시 캐시 폴백
+  - 유닛테스트 169개 통과
 - [2026/04/11] port ex 명령어에 Google Sheet 가이드 문구 추가
   - CSV 파일 전송 후 'Google Sheet에서 import' 안내 문구 추가
   - 유닛테스트 169개 통과, OCI 배포 완료
@@ -15,7 +18,7 @@
 - [2026/03/17] 파이프라인 구현 (pending + candidates 테이블)
 
 ## 다음 목표
-- [ ] [.contexts/plan-cache-strategy.md](.contexts/plan-cache-strategy.md) - `/port list` 캐시 strategy 개선
+- [x] [.contexts/plan-cache-strategy.md](.contexts/plan-cache-strategy.md) - `/port list` 캐시 strategy 개선
 - [ ] [.contexts/plan-request-batching.md](.contexts/plan-request-batching.md) - API 요청 배치 처리 (threshold: 100개+)
 
 ## 핵심 메모

@@ -111,7 +111,7 @@ pub async fn run_api_actor(mut rx: mpsc::Receiver<ApiRequest>) {
     let mut ctx = ActorContext::new(kis_config);
     let mut usd_krw: f64 = 1350.0;
 
-    // 시작 시 토큰 확인
+    // 시작 ��� 토��� 확인
     if auth::token_needs_refresh(&ctx.config.token) {
         ctx.refresh_token().await;
     }

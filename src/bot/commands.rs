@@ -190,6 +190,12 @@ fn kst_now() -> chrono::DateTime<FixedOffset> {
     Utc::now().with_timezone(&kst)
 }
 
+fn cache_age_minutes(cached_at: &Option<chrono::DateTime<FixedOffset>>) -> f64 {
+    cached_at
+        .map(|ca| kst_now().signed_duration_since(ca).num_milliseconds() as f64 / 60000.0)
+        .unwrap_or(f64::INFINITY)
+}
+
 fn help_text() -> String {
     "📋 명령어 목록\n\n\
      포트폴리오 (/port 또는 /p):\n\
@@ -579,11 +585,21 @@ async fn cmd_list(user_id: i64, args: &str, api: &ApiHandle) -> String {
 
     for &idx in &indices {
         let h = &mut store.holdings[idx];
-        // CART: API 호출 없이 cached_price 직접 사용
         let price_result = if h.market == Market::CART {
             match h.cached_price {
                 Some(cp) => Ok(PriceData { name: h.name.clone(), current_price: cp, change_pct: 0.0 }),
                 None => Err(anyhow::anyhow!("현재가 미설정")),
+            }
+        } else if let (Some(cp), Some(_)) = (h.cached_price, h.cached_at) {
+            let age = cache_age_minutes(&h.cached_at);
+            if age <= 1.0 {
+                Ok(PriceData { name: h.name.clone(), current_price: cp, change_pct: 0.0 })
+            } else {
+                let result = api.get_price_for_market(h.market, &h.symbol).await;
+                match result {
+                    Ok(price) => Ok(price),
+                    Err(_) => Ok(PriceData { name: h.name.clone(), current_price: cp, change_pct: 0.0 }),
+                }
             }
         } else {
             api.get_price_for_market(h.market, &h.symbol).await
