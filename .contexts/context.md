@@ -4,6 +4,10 @@
 - 커밋 완료 후 context 파일 업데이트. 푸시는 요청 시에만 수행
 
 ## 현재 상태
+- [2026/04/11] price=0 문제 해결 
+  - API: price ≤ 0 또는 empty response → Error 반환 (国内的/国外/bond)
+  - cached_price: price > 0만 저장/폴백
+  - 폴백: cached_price = 0이면 미포함 (failed_symbols에 추가)
 - [2026/04/11] API Actor 파이프라이닝 (FuturesUnordered) + 캐시 전략 개선
   - /port list: 26.8초 → 2.7초 (파이프라인) → 0.0초 (캐시 히트)
   - Actor: send_with_retry free function, API 함수 시그니처 변경 (ctx → client,headers)

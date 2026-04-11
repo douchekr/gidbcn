@@ -52,13 +52,15 @@ pub async fn check_all_signals(api: &ApiHandle, bot: &Bot, user_id: i64) {
             }
         };
 
-        // 캐시 갱신
-        if let Some(h) = portfolio.holdings.iter_mut().find(|h| {
-            h.symbol == symbol && (sig_account.is_empty() || h.account == sig_account)
-        }) {
-            h.cached_price = Some(price_data.current_price);
-            h.cached_at = Some(kst_now());
-            portfolio_updated = true;
+        // 캐시 갱신 (price > 0만)
+        if price_data.current_price > 0.0 {
+            if let Some(h) = portfolio.holdings.iter_mut().find(|h| {
+                h.symbol == symbol && (sig_account.is_empty() || h.account == sig_account)
+            }) {
+                h.cached_price = Some(price_data.current_price);
+                h.cached_at = Some(kst_now());
+                portfolio_updated = true;
+            }
         }
 
         let triggered = price::evaluate(

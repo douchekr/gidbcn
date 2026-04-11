@@ -32,9 +32,19 @@ pub fn parse_price_response(body: &str) -> Result<BondData> {
     let resp: serde_json::Value =
         serde_json::from_str(body).context("Bond price JSON parse failed")?;
     let output = &resp["output"];
+
+    if output.is_null() || output.get("bond_prpr").is_none() {
+        anyhow::bail!("Empty response output");
+    }
+
+    let price = parse_f64(output["bond_prpr"].as_str());
+    if price <= 0.0 {
+        anyhow::bail!("Invalid price: {price}");
+    }
+
     Ok(BondData {
         name: output["hts_kor_isnm"].as_str().unwrap_or("").to_string(),
-        current_price: parse_f64(output["bond_prpr"].as_str()),
+        current_price: price,
         change_pct: parse_f64(output["prdy_ctrt"].as_str()),
     })
 }

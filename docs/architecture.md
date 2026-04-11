@@ -81,7 +81,9 @@ API 함수는 `(client, base_url, headers)` 받아서 독립 실행. Actor 상�
 해외주식 응답 시 `t_rate` → `usd_krw` completion 핸들러에서 갱신.
 
 ### /port list 캐시
-`cached_price` + `cached_at` age ≤ 1분이면 API 미호출. 장중 반복 조회 시 즉시 응답.
+`cached_price` + `cached_at` age ≤ 1분 + price > 0이면 API 미호출. 장중 반복 조회 시 즉시 응답.
+
+**price=0 방지**: API 응답 파싱 시 price ≤ 0 또는 empty → Error 반환. cached_price는 price > 0만 저장/폴백.
 
 ---
 

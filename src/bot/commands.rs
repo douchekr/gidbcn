@@ -592,13 +592,14 @@ async fn cmd_list(user_id: i64, args: &str, api: &ApiHandle) -> String {
             }
         } else if let (Some(cp), Some(_)) = (h.cached_price, h.cached_at) {
             let age = cache_age_minutes(&h.cached_at);
-            if age <= 1.0 {
+            if age <= 1.0 && cp > 0.0 {
                 Ok(PriceData { name: h.name.clone(), current_price: cp, change_pct: 0.0 })
             } else {
                 let result = api.get_price_for_market(h.market, &h.symbol).await;
                 match result {
                     Ok(price) => Ok(price),
-                    Err(_) => Ok(PriceData { name: h.name.clone(), current_price: cp, change_pct: 0.0 }),
+                    Err(_) if cp > 0.0 => Ok(PriceData { name: h.name.clone(), current_price: cp, change_pct: 0.0 }),
+                    Err(_) => Err(anyhow::anyhow!("Price unavailable for {}", h.symbol)),
                 }
             }
         } else {
@@ -610,7 +611,7 @@ async fn cmd_list(user_id: i64, args: &str, api: &ApiHandle) -> String {
                 if h.name.is_empty() && !price.name.is_empty() {
                     h.name = price.name.clone();
                 }
-                if h.market != Market::CART {
+                if h.market != Market::CART && price.current_price > 0.0 {
                     h.cached_price = Some(price.current_price);
                     h.cached_at = Some(kst_now());
                     holdings_updated = true;

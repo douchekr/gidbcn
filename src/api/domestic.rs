@@ -35,9 +35,19 @@ pub fn parse_price_response(body: &str) -> Result<PriceData> {
     let resp: serde_json::Value =
         serde_json::from_str(body).context("Domestic price JSON parse failed")?;
     let output = &resp["output"];
+
+    if output.is_null() || output.get("stck_prpr").is_none() {
+        anyhow::bail!("Empty response output");
+    }
+
+    let price = parse_f64(output["stck_prpr"].as_str());
+    if price <= 0.0 {
+        anyhow::bail!("Invalid price: {price}");
+    }
+
     Ok(PriceData {
         name: String::new(),
-        current_price: parse_f64(output["stck_prpr"].as_str()),
+        current_price: price,
         change_pct: parse_f64(output["prdy_ctrt"].as_str()),
     })
 }
