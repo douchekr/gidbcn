@@ -51,14 +51,23 @@ async fn call_llm(client: &reqwest::Client, model: &str, prompt: &str) -> Result
         "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
     );
 
+    // responseMimeType=application/json: 모델이 prose 못 쓰고 JSON만 출력하도록 강제.
+    // Gemma 4가 instruction을 prose로 풀어쓰는 문제 대응.
     let body = serde_json::json!({
-        "contents": [{"parts": [{"text": prompt}]}]
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json"
+        }
     });
+
+    // LLM은 보통 30초 안에 응답. 60초 넘으면 hang으로 간주.
+    const LLM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
     let resp = client
         .post(&url)
         .header("Content-Type", "application/json")
         .json(&body)
+        .timeout(LLM_TIMEOUT)
         .send()
         .await
         .context("LLM API 요청 실패")?;
@@ -77,6 +86,7 @@ async fn call_llm(client: &reqwest::Client, model: &str, prompt: &str) -> Result
                 .post(&url)
                 .header("Content-Type", "application/json")
                 .json(&body)
+                .timeout(LLM_TIMEOUT)
                 .send()
                 .await
                 .context("LLM API 재시도 요청 실패")?;
@@ -211,14 +221,15 @@ pub async fn hunt(client: &reqwest::Client) -> Result<Vec<HuntResult>> {
         bail!("오늘 사냥 호출 한도 초과 ({today_calls}/{max_calls})");
     }
 
+    // 주의: responseMimeType=application/json과 markdown 펜스 지시가 충돌하면
+    // 모델이 끝에서 펜스 닫으려다 hallucinate → 펜스 표기 없이 schema만 평문으로 제시.
     let full_prompt = format!(
         "## Instructions\n\
          {hunt_prompt}\n\n\
-         ## Output Format\n\
-         Return exactly {candidate_count} items as a JSON array:\n\
-         ```json\n\
-         [{{\"ticker\":\"XXX\",\"market\":\"NAS\",\"name\":\"...\",\"sector\":\"...\",\"reason\":\"...\",\"score\":75}}]\n\
-         ```\n\
+         ## Output\n\
+         Return exactly {candidate_count} items as a JSON array. \
+         Each item schema: \
+         {{\"ticker\":\"XXX\",\"market\":\"NAS\",\"name\":\"...\",\"sector\":\"...\",\"reason\":\"...\",\"score\":75}}\n\
          - market: NAS (NASDAQ), NYS (NYSE), AMS (AMEX)\n\
          - score: 0–100 (your confidence in this pick based on the instructions above)"
     );
@@ -237,8 +248,18 @@ pub async fn hunt(client: &reqwest::Client) -> Result<Vec<HuntResult>> {
 
     match parsed {
         Ok(arr) => {
-            results = serde_json::from_value(arr).unwrap_or_default();
-            tickers_str = results.iter().map(|r| r.ticker.as_str()).collect::<Vec<_>>().join(",");
+            match serde_json::from_value::<Vec<HuntResult>>(arr.clone()) {
+                Ok(v) => {
+                    results = v;
+                    tickers_str = results.iter().map(|r| r.ticker.as_str()).collect::<Vec<_>>().join(",");
+                }
+                Err(e) => {
+                    let _ = db::insert_prompt_history(
+                        PromptType::Hunt, &full_prompt, &response_text, &hunt_model, "", "parse_error",
+                    );
+                    bail!("사냥 결과 항목 구조 불일치: {e} | array: {arr}");
+                }
+            }
         }
         Err(e) => {
             let _ = db::insert_prompt_history(
@@ -289,16 +310,16 @@ pub async fn judge(
         bail!("오늘 평가 호출 한도 초과 ({today_calls}/{max_calls})");
     }
 
+    // 펜스 표기 제거 (mimeType=application/json과 충돌 방지).
     let full_prompt = format!(
         "## Instructions\n\
          {judge_prompt}\n\n\
          ## Market Data\n\
          {data_text}\n\n\
-         ## Output Format\n\
-         Return a JSON array with your evaluation:\n\
-         ```json\n\
-         [{{\"ticker\":\"XXX\",\"score\":85,\"verdict\":\"...\"}}]\n\
-         ```\n\
+         ## Output\n\
+         Return a JSON array with your evaluation. \
+         Each item schema: \
+         {{\"ticker\":\"XXX\",\"score\":85,\"verdict\":\"...\"}}\n\
          - score: 0–100\n\
          - verdict: brief explanation"
     );
@@ -316,8 +337,18 @@ pub async fn judge(
 
     match parsed {
         Ok(arr) => {
-            results = serde_json::from_value(arr).unwrap_or_default();
-            tickers_str = results.iter().map(|r| r.ticker.as_str()).collect::<Vec<_>>().join(",");
+            match serde_json::from_value::<Vec<JudgeResult>>(arr.clone()) {
+                Ok(v) => {
+                    results = v;
+                    tickers_str = results.iter().map(|r| r.ticker.as_str()).collect::<Vec<_>>().join(",");
+                }
+                Err(e) => {
+                    let _ = db::insert_prompt_history(
+                        PromptType::Judge, &full_prompt, &response_text, &judge_model, "", "parse_error",
+                    );
+                    bail!("평가 결과 항목 구조 불일치: {e} | array: {arr}");
+                }
+            }
         }
         Err(e) => {
             let _ = db::insert_prompt_history(

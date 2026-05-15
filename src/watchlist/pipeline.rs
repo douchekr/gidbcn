@@ -184,9 +184,16 @@ pub async fn run_evaluate(
                 }
             }
             Err(e) => {
-                tracing::warn!("수집 실패 → BL: {}: {e:#}", p.ticker);
-                let _ = db::add_blacklist(&p.ticker, "한투 API 조회 실패 (자동)");
-                let _ = db::delete_pending(&p.ticker);
+                // 단발 실패로 영구 BL 금지. strike_count 누적 후 3회째에만 BL.
+                let new_strike = db::increment_pending_strike(&p.ticker)
+                    .unwrap_or(p.strike_count + 1);
+                if new_strike >= 3 {
+                    tracing::warn!("수집 실패 3/3 → BL: {}: {e:#}", p.ticker);
+                    let _ = db::add_blacklist(&p.ticker, "한투 API 조회 3회 실패 (자동)");
+                    let _ = db::delete_pending(&p.ticker);
+                } else {
+                    tracing::warn!("수집 실패 {}/3 (pending 유지): {}: {e:#}", new_strike, p.ticker);
+                }
                 report.collect_failed += 1;
             }
         }

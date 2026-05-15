@@ -23,16 +23,17 @@ pub fn init_db() -> Result<()> {
 
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS pending (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker      TEXT NOT NULL UNIQUE,
-            market      TEXT NOT NULL DEFAULT '',
-            name        TEXT NOT NULL DEFAULT '',
-            sector      TEXT NOT NULL DEFAULT '',
-            reason      TEXT NOT NULL DEFAULT '',
-            hunt_score  REAL,
-            hunt_count  INTEGER NOT NULL DEFAULT 1,
-            prompt_id   INTEGER,
-            created_at  TEXT NOT NULL
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker       TEXT NOT NULL UNIQUE,
+            market       TEXT NOT NULL DEFAULT '',
+            name         TEXT NOT NULL DEFAULT '',
+            sector       TEXT NOT NULL DEFAULT '',
+            reason       TEXT NOT NULL DEFAULT '',
+            hunt_score   REAL,
+            hunt_count   INTEGER NOT NULL DEFAULT 1,
+            strike_count INTEGER NOT NULL DEFAULT 0,
+            prompt_id    INTEGER,
+            created_at   TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS candidates (
@@ -168,7 +169,7 @@ pub fn insert_pending(
 pub fn list_pending() -> Result<Vec<PendingEntry>> {
     with_db(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT id, ticker, market, name, sector, reason, hunt_score, hunt_count, created_at
+            "SELECT id, ticker, market, name, sector, reason, hunt_score, hunt_count, strike_count, created_at
              FROM pending ORDER BY hunt_score DESC, hunt_count DESC, id DESC",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -181,7 +182,8 @@ pub fn list_pending() -> Result<Vec<PendingEntry>> {
                 reason: row.get(5)?,
                 hunt_score: row.get(6)?,
                 hunt_count: row.get(7)?,
-                created_at: row.get(8)?,
+                strike_count: row.get(8)?,
+                created_at: row.get(9)?,
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
@@ -225,7 +227,7 @@ pub fn clear_all_pending() -> Result<usize> {
 pub fn get_pending_by_ticker(ticker: &str) -> Result<Option<PendingEntry>> {
     with_db(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT id, ticker, market, name, sector, reason, hunt_score, hunt_count, created_at
+            "SELECT id, ticker, market, name, sector, reason, hunt_score, hunt_count, strike_count, created_at
              FROM pending WHERE ticker = ?1 LIMIT 1",
         )?;
         let mut rows = stmt.query_map(params![ticker], |row| {
@@ -238,10 +240,28 @@ pub fn get_pending_by_ticker(ticker: &str) -> Result<Option<PendingEntry>> {
                 reason: row.get(5)?,
                 hunt_score: row.get(6)?,
                 hunt_count: row.get(7)?,
-                created_at: row.get(8)?,
+                strike_count: row.get(8)?,
+                created_at: row.get(9)?,
             })
         })?;
         Ok(rows.next().and_then(|r| r.ok()))
+    })
+}
+
+/// pending의 strike_count++ 후 새 값 반환.
+/// 한투 API 수집 실패 시 호출. 3회 누적되면 호출자가 BL로 옮긴다.
+pub fn increment_pending_strike(ticker: &str) -> Result<i64> {
+    with_db(|conn| {
+        conn.execute(
+            "UPDATE pending SET strike_count = strike_count + 1 WHERE ticker = ?1",
+            params![ticker],
+        )?;
+        let n: i64 = conn.query_row(
+            "SELECT strike_count FROM pending WHERE ticker = ?1",
+            params![ticker],
+            |row| row.get(0),
+        )?;
+        Ok(n)
     })
 }
 
@@ -969,6 +989,7 @@ mod tests {
                 reason TEXT NOT NULL DEFAULT '',
                 hunt_score REAL,
                 hunt_count INTEGER NOT NULL DEFAULT 1,
+                strike_count INTEGER NOT NULL DEFAULT 0,
                 prompt_id INTEGER,
                 created_at TEXT NOT NULL
             );
@@ -1064,6 +1085,25 @@ mod tests {
         assert_eq!(count_pending().unwrap(), 1);
 
         assert!(!delete_pending("NOPE").unwrap());
+    }
+
+    #[test]
+    fn pending_strike_starts_at_zero() {
+        setup_test_db();
+        insert_pending("AAA", "NAS", "A", "T", "r", 0.0, None).unwrap();
+        let p = get_pending_by_ticker("AAA").unwrap().unwrap();
+        assert_eq!(p.strike_count, 0);
+    }
+
+    #[test]
+    fn increment_pending_strike_counts_up() {
+        setup_test_db();
+        insert_pending("AAA", "NAS", "A", "T", "r", 0.0, None).unwrap();
+        assert_eq!(increment_pending_strike("AAA").unwrap(), 1);
+        assert_eq!(increment_pending_strike("AAA").unwrap(), 2);
+        assert_eq!(increment_pending_strike("AAA").unwrap(), 3);
+        let p = get_pending_by_ticker("AAA").unwrap().unwrap();
+        assert_eq!(p.strike_count, 3);
     }
 
     #[test]

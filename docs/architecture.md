@@ -183,8 +183,8 @@ Google AI Studio (Flash Lite + Gemma) + 한투 API 조합.
 pending (사냥 버퍼)              candidates (감정 완료)
   ticker UNIQUE                    ticker UNIQUE
   hunt_score, hunt_count           score, verdict, detail_text
-  market, name, sector, reason     status: judged | blacklisted
-                                   strike_count
+  strike_count                     status: judged | blacklisted
+  market, name, sector, reason     strike_count
 ```
 
 ### 파이프라인과 상태 전이
@@ -196,7 +196,8 @@ pending (사냥 버퍼)              candidates (감정 완료)
 가죽 작업:
   ① 부활: candidates(BL) → pending  (score ≥ min×0.9, strike < 3)
   ② 수집: pending → KIS API → candidates 졸업 (count 합산)
-     pending 실패 → candidates(BL, 영구)    judged 실패 → 스킵
+     pending 실패 → strike+1 (pending 유지)  judged 실패 → 스킵
+     strike ≥ 3 시에만 candidates(BL) 전환  (단발 장애로 영구 BL 금지)
   ③ 감정: score < min → BL                  score ≥ min → judged
   ④ 도태: 상위 N 외 → BL                    (effective score 기준)
 ```
@@ -212,12 +213,15 @@ effective  = score + ln(1 + hunt_count) × weight    ← 도태 판정용
 |------|----------|------|
 | **min_score (60)** | 감정 직후 | 절대 마지노선. 미달 즉시 BL. 보너스 무관 |
 | **hunt_count 보너스** | 도태(cull) | 반복 추천 종목 보호. ln 포화 (count=100 → +13.8 한계) |
-| **삼진아웃 (strike ≥ 3)** | 부활 판정 | 3회 척살 → 부활 불가. retention(100일) 후 자연소멸 |
-| **수집 실패** | 수집 | pending → 영구 BL (score=NULL → 부활 불가) |
-| **수동 척살** | `/w bl add` | 영구 BL (score=NULL, 수집 실패와 동일 경로) |
+| **삼진아웃 (strike ≥ 3)** | 부활 판정 / 수집 실패 | 점수 척살은 부활 불가, 수집 실패는 BL 전환. retention(100일) 후 자연소멸 |
+| **수집 실패** | 수집 | strike+1 → 3회 누적 시 BL (단발 장애 보호) |
+| **수동 척살** | `/w bl add` | 영구 BL (score=NULL, strike_count 무관) |
 
-### Gemini 429 대응 + 모델 폴백
+### Gemini 호출 정책
 
-- **PerMinute 429**: retryDelay + 5초 대기 → 같은 모델 1회 재시도
-- **PerDay 등**: 즉시 다음 모델 폴백
+- **요청 본문**: `generationConfig.responseMimeType="application/json"` 강제. 프롬프트에 markdown 펜스 표기 금지 (mimeType과 충돌 시 모델이 끝에서 hallucinate)
+- **HTTP 타임아웃**: 60초 (`call_llm` 내부). hang 방지
+- **429 PerMinute**: `retryDelay + 5초` 대기 → 같은 모델 1회 재시도
+- **429 PerDay / 4xx / 5xx**: 즉시 다음 모델 폴백
+- **응답 파싱**: `extract_json_array` 실패 또는 `Vec<HuntResult>` / `Vec<JudgeResult>` 역직렬화 실패 시 `prompt_history.status='parse_error'`로 박고 bail (묵음 폴백 금지)
 - config 배열 순회, 당일 성공 모델 우선. Gemini 호출은 API Actor 미경유.

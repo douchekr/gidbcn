@@ -12,6 +12,7 @@ pub struct PendingEntry {
     pub reason: String,
     pub hunt_score: Option<f64>,
     pub hunt_count: i64,
+    pub strike_count: i64,
     pub created_at: String,
 }
 

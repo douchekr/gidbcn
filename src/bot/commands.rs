@@ -1306,7 +1306,7 @@ fn cmd_status(user_id: i64) -> String {
 
 async fn cmd_watchlist(
     args: &str,
-    _api: &ApiHandle,
+    api: &ApiHandle,
     discovery_enabled: &std::sync::Arc<std::sync::atomic::AtomicBool>,
     discovery_trigger: &std::sync::Arc<tokio::sync::Notify>,
 ) -> String {
@@ -1352,6 +1352,14 @@ async fn cmd_watchlist(
             discovery_enabled.store(false, Ordering::SeqCst);
             "⏹ 은신처 복귀. 오늘은 여기까지다.".to_string()
         }
+        "eval" | "ev" => {
+            // 수동 가죽 작업: pending+judged → KIS 수집 → Gemini judge → BL/생존
+            let client = reqwest::Client::new();
+            match crate::watchlist::pipeline::run_evaluate(api, &client).await {
+                Ok(report) => format!("🔪 수동 가죽 작업 완료\n{}", report.summary()),
+                Err(e) => format!("❌ 가죽 작업 실패: {e:#}"),
+            }
+        }
         "list" | "ls" => cmd_watch_ls(&rest, discovery_enabled.load(Ordering::SeqCst)),
         "info" | "i" => cmd_watch_info(&rest.to_uppercase()),
         "export" | "ex" => cmd_watch_export(),
@@ -1363,6 +1371,7 @@ async fn cmd_watchlist(
         _ => "📋 워치리스트 명령어\n\n\
               /w hunt — 사냥 출발\n\
               /w stop — 은신처 복귀\n\
+              /w eval — 수동 가죽 작업 1회 (즉시)\n\
               /w ls — 포획 게코 (기본)\n\
               /w ls pelt — 가죽 현황\n\
               /w export — CSV 내보내기\n\

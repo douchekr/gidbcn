@@ -155,6 +155,7 @@ CREATE TABLE pending (
     ticker TEXT NOT NULL UNIQUE, market TEXT, name TEXT,
     sector TEXT, reason TEXT, hunt_score REAL,
     hunt_count INTEGER NOT NULL DEFAULT 1,
+    strike_count INTEGER NOT NULL DEFAULT 0,  -- 한투 API 수집 실패 누적. 3회면 BL
     prompt_id INTEGER, created_at TEXT NOT NULL
 );
 ```
@@ -190,10 +191,10 @@ CREATE TABLE candidates (
 ### watchlist 설정
 | 키 | 기본값 | 설명 |
 |---|---|---|
-| `hunt_models` | ["gemini-2.5-flash-lite"] | 사냥 모델 (폴백 순서) |
-| `judge_models` | ["gemma-3-27b-it"] | 평가 모델 (폴백 순서) |
-| `max_hunt_calls_per_day` | 20 | 일일 사냥 호출 한도 |
-| `max_judge_calls_per_day` | 14400 | 일일 평가 호출 한도 |
+| `hunt_models` | ["gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-2.5-flash"] | 사냥 모델 (폴백 순서). Gemma는 mimeType=JSON 미지원으로 제외 |
+| `judge_models` | ["gemini-3.1-flash-lite", "gemini-2.5-flash-lite"] | 평가 모델 (폴백 순서) |
+| `max_hunt_calls_per_day` | 50 | 일일 사냥 호출 한도 |
+| `max_judge_calls_per_day` | 50 | 일일 평가 호출 한도 |
 | `max_survivors` | 50 | 도태 후 생존 상한 |
 | `hunt_count_weight` | 3.0 | 반복 추천 보너스 계수 (도태 판정용) |
 | `candidate_count` | 30 | 사냥당 후보 수 |
@@ -230,6 +231,7 @@ CREATE TABLE candidates (
 |---|---|
 | `/w hunt` | 사냥 시작 (즉시 1회 + 자동 주기) |
 | `/w stop` | 사냥 중지 |
+| `/w eval` | 수동 가죽 작업 1회 (자동 사이클 외 즉시 트리거) |
 | `/w ls` | 포획 게코 (기본) |
 | `/w ls pelt` | 가죽 현황 (점수순) |
 | `/w info [TICKER]` | 종목 상세 |
