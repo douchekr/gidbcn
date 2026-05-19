@@ -40,7 +40,16 @@ fn remember_model(cache_idx: usize, model: &str) {
 }
 
 /// Google AI Studio LLM 단일 모델 호출
-async fn call_llm(client: &reqwest::Client, model: &str, prompt: &str) -> Result<String> {
+///
+/// `response_schema`가 Some이면 generationConfig.responseSchema로 주입.
+/// 디코더가 schema 위반 토큰을 차단하므로 구조 깨짐(닫는 괄호 hallucinate,
+/// reason 안에 추가 따옴표 끼우기 등)을 원천 차단.
+async fn call_llm(
+    client: &reqwest::Client,
+    model: &str,
+    prompt: &str,
+    response_schema: Option<&Value>,
+) -> Result<String> {
     let api_key = storage::with_config(|c| c.secrets.gemini_api_key.clone());
 
     if api_key.is_empty() {
@@ -52,12 +61,16 @@ async fn call_llm(client: &reqwest::Client, model: &str, prompt: &str) -> Result
     );
 
     // responseMimeType=application/json: 모델이 prose 못 쓰고 JSON만 출력하도록 강제.
-    // Gemma 4가 instruction을 prose로 풀어쓰는 문제 대응.
+    // responseSchema: schema 위반 토큰을 디코더가 마스킹 → 구조 보장.
+    let mut generation_config = serde_json::json!({
+        "responseMimeType": "application/json"
+    });
+    if let Some(schema) = response_schema {
+        generation_config["responseSchema"] = schema.clone();
+    }
     let body = serde_json::json!({
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "responseMimeType": "application/json"
-        }
+        "generationConfig": generation_config,
     });
 
     // LLM은 보통 30초 안에 응답. 60초 넘으면 hang으로 간주.
@@ -137,12 +150,13 @@ async fn call_llm_with_fallback(
     models: &[String],
     prompt: &str,
     cache_idx: usize,
+    response_schema: Option<&Value>,
 ) -> Result<(String, String)> {
     let ordered = prioritize_models(models, cache_idx);
     let mut last_err = None;
 
     for model in &ordered {
-        match call_llm(client, model, prompt).await {
+        match call_llm(client, model, prompt, response_schema).await {
             Ok(text) => {
                 remember_model(cache_idx, model);
                 return Ok((text, model.clone()));
@@ -187,6 +201,44 @@ fn extract_gemini_text(response_body: &str) -> Result<String> {
     Ok(content.to_string())
 }
 
+/// Hunt 응답 스키마 — Vec<HuntResult>. Gemini는 OpenAPI 3.0 subset(타입 대문자) 사용.
+/// propertyOrdering으로 생성 순서를 고정해야 디코더가 토큰을 안정적으로 마스킹.
+fn hunt_response_schema() -> Value {
+    serde_json::json!({
+        "type": "ARRAY",
+        "items": {
+            "type": "OBJECT",
+            "properties": {
+                "ticker":  {"type": "STRING"},
+                "market":  {"type": "STRING", "enum": ["NAS", "NYS", "AMS"]},
+                "name":    {"type": "STRING"},
+                "sector":  {"type": "STRING"},
+                "reason":  {"type": "STRING"},
+                "score":   {"type": "NUMBER"}
+            },
+            "required": ["ticker", "market", "name", "sector", "reason", "score"],
+            "propertyOrdering": ["ticker", "market", "name", "sector", "reason", "score"]
+        }
+    })
+}
+
+/// Judge 응답 스키마 — Vec<JudgeResult>.
+fn judge_response_schema() -> Value {
+    serde_json::json!({
+        "type": "ARRAY",
+        "items": {
+            "type": "OBJECT",
+            "properties": {
+                "ticker":  {"type": "STRING"},
+                "score":   {"type": "NUMBER"},
+                "verdict": {"type": "STRING"}
+            },
+            "required": ["ticker", "score", "verdict"],
+            "propertyOrdering": ["ticker", "score", "verdict"]
+        }
+    })
+}
+
 /// Gemini 응답에서 JSON 배열 추출 (markdown fence 제거)
 fn extract_json_array(text: &str) -> Result<Value> {
     // markdown fence 제거: ```json ... ``` 또는 ``` ... ```
@@ -221,20 +273,20 @@ pub async fn hunt(client: &reqwest::Client) -> Result<Vec<HuntResult>> {
         bail!("오늘 사냥 호출 한도 초과 ({today_calls}/{max_calls})");
     }
 
-    // 주의: responseMimeType=application/json과 markdown 펜스 지시가 충돌하면
-    // 모델이 끝에서 펜스 닫으려다 hallucinate → 펜스 표기 없이 schema만 평문으로 제시.
+    // 구조는 responseSchema가 강제. 프롬프트는 의미(시장 코드, 점수 범위)만 명시.
     let full_prompt = format!(
         "## Instructions\n\
          {hunt_prompt}\n\n\
          ## Output\n\
-         Return exactly {candidate_count} items as a JSON array. \
-         Each item schema: \
-         {{\"ticker\":\"XXX\",\"market\":\"NAS\",\"name\":\"...\",\"sector\":\"...\",\"reason\":\"...\",\"score\":75}}\n\
-         - market: NAS (NASDAQ), NYS (NYSE), AMS (AMEX)\n\
-         - score: 0–100 (your confidence in this pick based on the instructions above)"
+         Return exactly {candidate_count} items.\n\
+         - market: one of NAS (NASDAQ), NYS (NYSE), AMS (AMEX)\n\
+         - score: 0–100 (your confidence in this pick)"
     );
 
-    let response = call_llm_with_fallback(client, &hunt_models, &full_prompt, CACHE_HUNT).await;
+    let schema = hunt_response_schema();
+    let response = call_llm_with_fallback(
+        client, &hunt_models, &full_prompt, CACHE_HUNT, Some(&schema),
+    ).await;
 
     // API 사용 로그
     let _ = db::log_api_call("gemini", "hunt", response.is_ok());
@@ -310,22 +362,23 @@ pub async fn judge(
         bail!("오늘 평가 호출 한도 초과 ({today_calls}/{max_calls})");
     }
 
-    // 펜스 표기 제거 (mimeType=application/json과 충돌 방지).
+    // 구조는 responseSchema가 강제. 프롬프트는 의미만 명시.
     let full_prompt = format!(
         "## Instructions\n\
          {judge_prompt}\n\n\
          ## Market Data\n\
          {data_text}\n\n\
          ## Output\n\
-         Return a JSON array with your evaluation. \
-         Each item schema: \
-         {{\"ticker\":\"XXX\",\"score\":85,\"verdict\":\"...\"}}\n\
+         Return your evaluation.\n\
          - score: 0–100\n\
          - verdict: brief explanation"
     );
 
     // 평가 모델 호출 (폴백)
-    let response = call_llm_with_fallback(client, &judge_models, &full_prompt, CACHE_JUDGE).await;
+    let schema = judge_response_schema();
+    let response = call_llm_with_fallback(
+        client, &judge_models, &full_prompt, CACHE_JUDGE, Some(&schema),
+    ).await;
 
     let _ = db::log_api_call("gemini", "judge", response.is_ok());
 
