@@ -219,9 +219,12 @@ effective  = score + ln(1 + hunt_count) × weight    ← 도태 판정용
 
 ### Gemini 호출 정책
 
-- **요청 본문**: `generationConfig.responseMimeType="application/json"` 강제. 프롬프트에 markdown 펜스 표기 금지 (mimeType과 충돌 시 모델이 끝에서 hallucinate)
+- **요청 본문**:
+  - `generationConfig.responseMimeType="application/json"` — JSON 형식만 출력
+  - `generationConfig.responseSchema` — hunt/judge 각각 OpenAPI 3.0 subset 스키마 주입. 디코더가 schema 위반 토큰을 마스킹해 구조 깨짐(닫는 괄호 hallucinate, reason 안에 추가 따옴표 등) 원천 차단
+  - 프롬프트에 markdown 펜스 / 인라인 schema 예시 금지. 구조는 schema가 강제하므로 의미(시장 코드 enum, 점수 범위)만 자연어로 명시
 - **HTTP 타임아웃**: 60초 (`call_llm` 내부). hang 방지
 - **429 PerMinute**: `retryDelay + 5초` 대기 → 같은 모델 1회 재시도
-- **429 PerDay / 4xx / 5xx**: 즉시 다음 모델 폴백
-- **응답 파싱**: `extract_json_array` 실패 또는 `Vec<HuntResult>` / `Vec<JudgeResult>` 역직렬화 실패 시 `prompt_history.status='parse_error'`로 박고 bail (묵음 폴백 금지)
+- **429 PerDay / 4xx / 5xx**: 즉시 다음 모델 폴백 (`call_llm_with_fallback`)
+- **응답 파싱**: `extract_json_array` 실패 또는 `Vec<HuntResult>` / `Vec<JudgeResult>` 역직렬화 실패 시 `prompt_history.status='parse_error'`로 박고 bail (묵음 폴백 금지). 파싱 실패는 폴백 루프 밖이라 다음 모델로 안 넘어감 — schema 강제로 구조 깨짐을 사전 차단하는 게 1차 방어선
 - config 배열 순회, 당일 성공 모델 우선. Gemini 호출은 API Actor 미경유.

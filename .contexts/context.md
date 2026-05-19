@@ -4,6 +4,14 @@
 - 커밋 완료 후 context 파일 업데이트. 푸시는 요청 시에만 수행
 
 ## 현재 상태
+- [2026/05/19] Gemini 사냥 JSON 파싱 실패 해결 → `responseSchema` 강제 도입
+  - 증상: 24시간 안 6건 hunt parse_error. 전부 `gemini-3.1-flash-lite`
+  - 패턴 1: 모델이 캐릭터 몰입해 reason 닫고 따옴표 밖에 평문 욕설 끼움
+  - 패턴 2: stop token 못 만들고 닫는 괄호 `]`/`}` hallucinate
+  - 원인: `responseMimeType=application/json`은 JSON 형식만 요구할 뿐 구조 강제 못 함
+  - 대응: `call_llm` 시그니처에 `response_schema: Option<&Value>` 추가. hunt는 `Vec<HuntResult>`, judge는 `Vec<JudgeResult>` OpenAPI 3.0 subset schema 주입. `required` + `propertyOrdering` 명시
+  - 프롬프트의 인라인 schema 예시 제거 (중복, 충돌 위험)
+  - 검증: 배포 후 첫 사이클 동일 모델로 30개 후보 성공 수집
 - [2026/05/15] 가죽 0 사태 → 모델 교체 + 운영 안정화 패키지
   - **Gemma 사망**: gemma-3 deprecated → gemma-4는 mimeType=JSON 미지원으로 timeout/500
   - judge_models: gemma-3-27b-it → `["gemini-3.1-flash-lite", "gemini-2.5-flash-lite"]`
@@ -20,6 +28,7 @@
 - [2026/03/17~20] 파이프라인 구현, 세계관, 문구, hunt_count
 
 ## 다음 목표
+- 운영 모니터링 — schema 강제 효과 확인 (24시간 parse_error 카운트 0 유지)
 - 운영 모니터링 — 가죽 안정 확보 확인
 - (선택) API key를 URL params에서 header로 옮기기 (로그 노출 방지)
 
