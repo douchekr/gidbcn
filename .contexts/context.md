@@ -4,6 +4,11 @@
 - 커밋 완료 후 context 파일 업데이트. 푸시는 요청 시에만 수행
 
 ## 현재 상태
+- [2026/07/29] 스케줄러 `biased;` 추가 + 브랜치 순서 재배열
+  - `select!` 브랜치 순서: signal > eval > hunt > trigger (기존: signal > hunt > trigger > eval)
+  - 동시 발동 시 랜덤 선택 방지, 시그널 체크 우선순위 보장
+  - `Arc<tokio::sync::Mutex>` → `Rc<RefCell>` 교체 시도했으나 dptree `Send + Sync` 제약으로 불가 확인
+  - AGENTS.md / docs/architecture.md에 "Mutex 금지 — 단, dptree 제약 예외" 명시
 - [2026/05/19] Gemini 사냥 JSON 파싱 실패 해결 → `responseSchema` 강제 도입
   - 증상: 24시간 안 6건 hunt parse_error. 전부 `gemini-3.1-flash-lite`
   - 패턴 1: 모델이 캐릭터 몰입해 reason 닫고 따옴표 밖에 평문 욕설 끼움
@@ -28,6 +33,7 @@
 - [2026/03/17~20] 파이프라인 구현, 세계관, 문구, hunt_count
 
 ## 다음 목표
+- 운영 모니터링 — `biased` 적용 후 select! 우선순위 정상 동작 확인
 - 운영 모니터링 — schema 강제 효과 확인 (24시간 parse_error 카운트 0 유지)
 - 운영 모니터링 — 가죽 안정 확보 확인
 - (선택) API key를 URL params에서 header로 옮기기 (로그 노출 방지)

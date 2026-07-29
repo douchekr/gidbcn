@@ -89,18 +89,23 @@ API 함수는 `(client, base_url, headers)` 받아서 독립 실행. Actor 상�
 
 ## 스케줄러
 
-`tokio::time::interval` + `tokio::select!` 루프.
+`tokio::time::interval` + `tokio::select!` 루프. `biased;` 로 브랜치 우선순위 고정 (동시 발동 시 랜덤 선택 방지).
 
 ```rust
 loop {
     tokio::select! {
-        _ = signal_tick.tick()        => { /* 장중이면 시그널 체크 */ }
-        _ = hunt_tick.tick()          => { /* 사냥 사이클 */ }
-        _ = discovery_trigger.notified() => { /* /w hunt 즉시 실행 */ }
-        _ = eval_tick.tick()          => { /* KST 02:00/14:00 가죽 작업 */ }
+        biased;
+        _ = signal_tick.tick()        => { /* 1순위: 장중이면 시그널 체크 */ }
+        _ = eval_tick.tick()          => { /* 2순위: KST 02:00/14:00 가죽 작업 */ }
+        _ = hunt_tick.tick()          => { /* 3순위: 사냥 사이클 */ }
+        _ = discovery_trigger.notified() => { /* 4순위: /w hunt 즉시 실행 */ }
     }
 }
 ```
+
+**우선순위 근거**: signal(5분) > eval(하루2회) > hunt(30분) > trigger(수동). 
+`biased` 없으면 동시 발동 시 무작위 선택되어 시그널 체크가 밀릴 수 있음.
+`biased` 추가로 `current_thread` 런타임에서도 우선순위 보장.
 
 ### 장시간 판단
 ```rust
