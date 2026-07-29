@@ -32,6 +32,7 @@ pub async fn run_scheduler(
 
     loop {
         tokio::select! {
+            biased;
             _ = signal_tick.tick() => {
                 if is_market_hours() {
                     let user_ids = storage::list_user_ids();
@@ -43,16 +44,6 @@ pub async fn run_scheduler(
                             engine::check_all_signals(&api, &bot, user_id).await;
                         }
                     }
-                }
-            }
-            _ = hunt_tick.tick() => {
-                if discovery_enabled.load(Ordering::SeqCst) && prompts_configured() && !hunt_exhausted() {
-                    run_hunt_cycle(&bot).await;
-                }
-            }
-            _ = discovery_trigger.notified() => {
-                if !hunt_exhausted() {
-                    run_hunt_cycle(&bot).await;
                 }
             }
             _ = eval_tick.tick() => {
@@ -67,6 +58,16 @@ pub async fn run_scheduler(
                             run_eval_cycle(&api, &bot).await;
                         }
                     }
+                }
+            }
+            _ = hunt_tick.tick() => {
+                if discovery_enabled.load(Ordering::SeqCst) && prompts_configured() && !hunt_exhausted() {
+                    run_hunt_cycle(&bot).await;
+                }
+            }
+            _ = discovery_trigger.notified() => {
+                if !hunt_exhausted() {
+                    run_hunt_cycle(&bot).await;
                 }
             }
         }
