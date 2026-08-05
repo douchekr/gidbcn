@@ -278,7 +278,7 @@ CREATE TABLE candidates (
 2. **`tokio::fs` 금지**. `std::fs` 동기 I/O.
 3. **`tokio-cron-scheduler` 금지**. `tokio::time::interval` 직접 구현.
 4. **에러**: `anyhow`. `unwrap()` 최소화.
-5. **로깅**: `tracing` (`info!`, `warn!`, `error!`).
+5. **로깅**: `tracing` (`info!`, `warn!`, `error!`). 파일 로그(`tracing-appender`) guard는 `std::mem::forget`으로 유지 — drop 시 writer 스레드가 종료되어 파일에 기록되지 않음.
 6. **TLS**: rustls. OpenSSL 금지.
 7. **rate limiting**: API Actor 내부 `tokio::time::sleep` (초당 20회).
 8. **입력 정규화**: 진입점에서 `rest.to_uppercase()` 1회. 개별 서브커맨드에서 중복 금지.

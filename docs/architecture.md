@@ -7,7 +7,8 @@
 1. Config::load() — 파일 없으면 템플릿 생성 후 종료
 2. log 섹션 마이그레이션 — 누락 시 defaults 포함 자동 저장
 3. 필수 설정 검증 (bot_token, app_key, app_secret, hts_id)
-4. 로깅 초기화 (stdout: RUST_LOG, 파일: WARN 이상)
+4. 로깅 초기화 (stdout: RUST_LOG, 파일: INFO 이상, 데일리 로테이션 retain_days)
+   - `tracing_appender::non_blocking` guard는 `std::mem::forget`으로 유지 (drop 시 파일 기록 중단)
 5. storage::init_config(config) — Config 인메모리 싱글턴 적재
 6. API Actor 채널 생성 (mpsc, buffer=32) + spawn_local
 7. 스케줄러 spawn_local (api_handle + tg_bot)

@@ -4,6 +4,12 @@
 - 커밋 완료 후 context 파일 업데이트. 푸시는 요청 시에만 수행
 
 ## 현재 상태
+- [2026/08/05] 파일 로그 dead code 버그 수정 + OCI 재부팅
+  - 증상: non_blocking guard(`_log_guard`)가 `init_logging` 반환 시 drop → 데일리 파일 로그 전부 0바이트 (journald에만 기록되던 상태)
+  - 원인: `tracing_appender::non_blocking` guard를 지역변수로 두면 writer 스레드가 종료되어 버퍼 유실
+  - 대응: `std::mem::forget(log_guard)`로 프로세스 수명과 동기화. 배포 후 142일 만에 OCI 재부팅
+  - 검증: `gidbcn.2026-08-05.log` 384바이트 기록 확인
+  - 참고: 운영 로그 전수 조사 결과 GetUpdates 타임아웃(357건/5개월), 수집 실패(대부분 상폐/거래불가 티커), Gemini 503 모두 정상동작 범위로 판단
 - [2026/07/29] 스케줄러 `biased;` 추가 + 브랜치 순서 재배열
   - `select!` 브랜치 순서: signal > eval > hunt > trigger (기존: signal > hunt > trigger > eval)
   - 동시 발동 시 랜덤 선택 방지, 시그널 체크 우선순위 보장

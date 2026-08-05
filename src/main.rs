@@ -195,7 +195,9 @@ fn init_logging(log_config: &config::LogConfig) {
         .filename_suffix("log")
         .build(&log_config.dir)
         .expect("로그 디렉토리 초기화 실패");
-    let (non_blocking, _log_guard) = tracing_appender::non_blocking(file_appender);
+    // guard를 leak하여 백그라운드 writer 스레드 수명을 프로세스 수명과 일치시킴
+    let (non_blocking, log_guard) = tracing_appender::non_blocking(file_appender);
+    std::mem::forget(log_guard);
 
     use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
     let stdout_filter =
